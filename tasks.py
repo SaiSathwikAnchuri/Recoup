@@ -1,7 +1,7 @@
 """Cross-platform task runner (there is no `make` on Windows).
 
     python tasks.py data          # regenerate data/ from config/priors.yaml
-    python tasks.py train         # train + calibrate the cause classifier
+    python tasks.py train         # train + calibrate the cause classifier and the liquidity model
     python tasks.py harness       # run policies over the batch, print comparison
     python tasks.py test          # run the test suite
     python tasks.py reproduce     # data + train + harness + tests, the canonical end-to-end check
@@ -25,7 +25,8 @@ def main() -> int:
     if cmd == "data":
         return run(*PY, "-m", "simulator.generate", "--n", "400", "--seed", "42", "--out", "data")
     if cmd == "train":
-        return run(*PY, "-m", "agent.train_classifier", *rest)
+        rc = run(*PY, "-m", "agent.train_classifier")
+        return rc or run(*PY, "-m", "agent.train_liquidity")
     if cmd == "harness":
         return run(*PY, "-m", "harness.run", "--seed", "42", *rest)
     if cmd == "test":
@@ -35,6 +36,7 @@ def main() -> int:
     if cmd == "reproduce":
         rc = run(*PY, "-m", "simulator.generate", "--n", "400", "--seed", "42", "--out", "data")
         rc = rc or run(*PY, "-m", "agent.train_classifier")
+        rc = rc or run(*PY, "-m", "agent.train_liquidity")
         rc = rc or run(*PY, "-m", "harness.run", "--seed", "42")
         return rc or run(*PY, "-m", "pytest", "-q")
     print(__doc__)

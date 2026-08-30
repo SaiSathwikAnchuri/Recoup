@@ -30,7 +30,7 @@ Full write-up: **`docs/`** / the project report artifact.
 | **2** | Harness (competing-risk rollout) + baselines (never-act, fixed-schedule, always-nudge) | ✅ done |
 | **3** | Cost model — `config/costs.yaml` + `agent/costs.py` (action costs, LTV estimate, missed-cycle penalty, compounding message fatigue) | ✅ done |
 | **4** | Calibrated cause classifier (`agent/classifier.py`) + `cause_aware` escalate branch | ✅ done |
-| 5 | Liquidity-window model | ⬜ |
+| **5** | Liquidity-window model (`agent/liquidity.py`) — quantile funding-day prediction + `liquidity_aware` policy | ✅ done |
 | 6 | Constraint layer + property tests | ⬜ |
 | 7 | Cost-aware policy | ⬜ |
 | 8 | Audit trail + LLM explain layer | ⬜ |
@@ -43,23 +43,29 @@ Full write-up: **`docs/`** / the project report artifact.
 | `never_act` (floor) | ₹0 | 0.0% | 0 | 0.00 | 0.0% | 88.0% | 0 |
 | `fixed_schedule` (Baseline A) | ₹302,303 | 32.8% | 994 | 0.73 | 30.0% | 88.0% | 0 |
 | `always_nudge` (Baseline B) | ₹301,066 | 31.5% | 970 | 1.45 | 25.8% | 86.5% | 0 |
-| `cause_aware` (Phase 4) | ₹386,543 | 42.5% | 804 | 0.74 | 39.8% | 89.2% | 24 |
-| _oracle timing (internal ceiling)_ | _₹695,950_ | _67.5%_ | _298_ | _0.00_ | — | _93.0%_ | — |
+| `cause_aware` (Phase 4 — + escalate branch) | ₹386,543 | 42.5% | 804 | 0.74 | 39.8% | 89.2% | 24 |
+| `liquidity_aware` (Phase 5 — + funding-window timing) | ₹724,340 | 73.5% | 553 | 0.17 | 26.0% | 94.2% | 24 |
+| _perfect-timing reference (single retry, no re-auth)_ | _₹695,950_ | _67.5%_ | _298_ | _0.00_ | — | _93.0%_ | — |
 
-Baseline A wastes **177 attempts + 59 SMS on dead mandates** (0% recovery) and stops
-retrying at day 7 — before most liquidity cases reach their next pay-day.
+Each policy adds **one idea** so the harness can price it in isolation:
 
-`cause_aware` changes **one thing**: when the calibrated classifier is confident the
-mandate is dead (P ≥ 0.30, ~90% precision) it stops retrying, sends one re-auth request
-and hands the case to a human. That alone is **+₹84k recovered (paired 95% CI
-[+₹116, +₹329]/case, excludes zero), 190 fewer attempts, and slightly better mandate
-preservation** — because a re-auth revives ~57% of dead mandates that retries never touch.
-Timing and full cost-pricing are still on the table for Phase 7.
+- **`cause_aware`** — when the calibrated classifier is confident the mandate is dead
+  (P ≥ 0.30, ~90% precision), stop retrying, send one re-auth, hand to a human.
+  **+₹84k** (paired 95% CI [+₹116, +₹329]/case, excludes zero); a re-auth revives ~57%
+  of dead mandates that retries never touch.
+- **`liquidity_aware`** — for everything not dead, schedule retries at the model's
+  predicted **p50 / p85 funding days** instead of days 1/3/7; a limit-breach waits for
+  the cap to reset on the 1st. **+₹422k vs fixed_schedule** (CI [+₹795, +₹1,353]/case),
+  on **fewer attempts** (553 vs 994) and **fewer messages**, with mandate preservation
+  up to 94%. The cost: recovery lands ~17 days out, so on-time rate drops to 26% — the
+  trade the Phase 7 EV policy will make deliberately, against the missed-cycle penalty.
 
-**Classifier** (trained on a separate seed, 4.2k cases): test accuracy **0.90** vs a
-0.60 majority-class prior; **ECE 0.047** calibrated (0.085 uncalibrated); on the
-held-out harness batch accuracy 0.885, ECE 0.056. Full numbers in
-`results/classifier_report.json`.
+**Classifier** (`results/classifier_report.json`): test accuracy **0.90** vs a 0.60
+majority prior; **ECE 0.047** calibrated (0.085 uncalibrated); holdout batch 0.885 / 0.056.
+
+**Liquidity model** (`results/liquidity_report.json`): funding-day **MAE 6.1 days** vs
+11.8 for a modal-day heuristic and 11.8 for fixed-day-7; p85 quantile coverage 0.83
+(0.84 on the holdout batch).
 
 ---
 
@@ -68,14 +74,15 @@ held-out harness batch accuracy 0.885, ECE 0.056. Full numbers in
 ```bash
 pip install -r requirements.txt
 
-python tasks.py reproduce        # data + train classifier + harness + tests  (Windows-friendly)
+python tasks.py reproduce        # data + train (classifier + liquidity) + harness + tests
 #   or, with make:  make reproduce
 
 python -m simulator.generate --n 400 --seed 42 --out data
 python -m simulator.show c0142 --ledger
 python -m agent.train_classifier          # -> agent/models/cause_clf.pkl + results/classifier_report.json
+python -m agent.train_liquidity           # -> agent/models/liquidity.pkl + results/liquidity_report.json
 python -m harness.run --seed 42
-python -m harness.run --trace c0142 --policy cause_aware
+python -m harness.run --trace c0142 --policy liquidity_aware
 python -m pytest -q
 ```
 
@@ -88,7 +95,8 @@ Outputs (git-ignored):
 | `data/summary.json` | batch statistics vs the priors |
 | `results/harness_42.json` | full per-case outcomes + summaries + exception lists per policy |
 | `results/classifier_report.json` | classifier accuracy, calibration (ECE / reliability bins), confusion, escalate-branch precision/recall |
-| `agent/models/cause_clf.pkl` | the trained + calibrated classifier (regenerated by `train`) |
+| `results/liquidity_report.json` | funding-day MAE / median AE / bias, p85 quantile coverage, vs naive baselines |
+| `agent/models/*.pkl` | the trained classifier + liquidity models (regenerated by `train`) |
 
 ---
 
@@ -142,8 +150,10 @@ agent/
   features.py             observable case -> numeric feature vector (never touches truth)
   classifier.py           calibrated multinomial cause classifier + should_escalate (the escalate branch)
   calibration.py          reliability bins / ECE / Brier — plain numpy
+  liquidity.py            quantile funding-day model (p50 / p85 days-from-now)
   train_classifier.py     CLI: generate training batch (separate seed), fit + calibrate, tune threshold, report
-  policies.py             cause_aware — fixed schedule + escalate branch (needs the trained model)
+  train_liquidity.py      CLI: train the funding-day quantile regressors, eval vs naive baselines
+  policies.py             cause_aware (Phase 4) + liquidity_aware (Phase 5) — staged, one idea each
 simulator/
   customers.py           income patterns, competing debits, cash ledger, back-sim history
   generator.py           assembles one case = observable record + hidden truth

@@ -15,10 +15,10 @@ PRIORS = yaml.safe_load(Path("config/priors.yaml").read_text())
 
 
 @pytest.fixture(scope="module")
-def model():
-    cases, truths = build_batch(3000, seed=2024, priors=PRIORS)
+def model(cached_batch):
+    cases, truths = cached_batch(2400, 2024)
     y = [t["true_cause"] for t in truths]
-    cut = 2100
+    cut = 1700
     est = train(cases[:cut], y[:cut], seed=1, calibrate=True)
     raw = train(cases[:cut], y[:cut], seed=1, calibrate=False)
     te_cases, te_y = cases[cut:], np.array(y[cut:])

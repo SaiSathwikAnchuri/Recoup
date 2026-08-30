@@ -1,0 +1,48 @@
+{
+  "train_n": 2226,
+  "test_n": 955,
+  "train_seed": 1000,
+  "model_path": "C:\\Users\\HP\\HACKATHON-PROJECTS\\RAZORPAY-HACKATHON\\agent\\models\\liquidity.pkl",
+  "test": {
+    "name": "liquidity_model",
+    "n": 955,
+    "mae_p50": 6.13,
+    "median_ae_p50": 3.33,
+    "bias_p50": -1.64,
+    "p85_coverage": 0.825,
+    "p85_mean_slack_days": 7.65,
+    "within_horizon_rate": 1.0
+  },
+  "baselines": {
+    "naive_modal_day": {
+      "name": "naive_modal_day",
+      "n": 955,
+      "mae_p50": 11.76,
+      "median_ae_p50": 10.0,
+      "bias_p50": 7.25,
+      "p85_coverage": 0.75,
+      "p85_mean_slack_days": 7.25,
+      "within_horizon_rate": 1.0
+    },
+    "fixed_day7": {
+      "name": "fixed_day7",
+      "n": 955,
+      "mae_p50": 11.78,
+      "median_ae_p50": 9.25,
+      "bias_p50": -10.08,
+      "p85_coverage": 0.218,
+      "p85_mean_slack_days": -10.08,
+      "within_horizon_rate": 1.0
+    }
+  },
+  "holdout_harness_batch": {
+    "name": "holdout_harness_batch",
+    "n": 225,
+    "mae_p50": 7.47,
+    "median_ae_p50": 4.47,
+    "bias_p50": -1.56,
+    "p85_coverage": 0.84,
+    "p85_mean_slack_days": 7.83,
+    "within_horizon_rate": 1.0
+  }
+}

@@ -8,3 +8,5 @@ audit/*.db
 results/*.png
 agent/models/
 .DS_Store
+
+.cache/

@@ -8,6 +8,7 @@ data:
 
 train:
 	$(PY) -m agent.train_classifier
+	$(PY) -m agent.train_liquidity
 
 harness:
 	$(PY) -m harness.run --seed 42
