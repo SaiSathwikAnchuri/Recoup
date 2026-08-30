@@ -8,6 +8,35 @@ import numpy as np
 
 from .engine import Outcome
 
+# Outcome.message_kinds keys (priors revocation keys) -> costs.yaml action kind
+_MSG_COST_KIND = {
+    "predebit_notification": "nudge",
+    "sms_failure_framed": "sms",
+    "reauth_request": "reauth",
+}
+
+
+def net_value(o: Outcome, costs) -> float:
+    """Rupees recovered, net of what the campaign cost: action spend, the
+    missed-cycle penalty on a late recovery, and the believed LTV of any mandate
+    that was revoked. This is the objective the Phase 7 policy optimises."""
+    v = 0.0
+    if o.recovered:
+        v += costs.recovery_value(o.amount, days=o.days_to_recovery or 0.0)
+        if not o.recovered_on_time:
+            v -= costs.missed_cycle_penalty(o.amount)
+    v -= o.attempts_used * costs.action_cost("retry")
+    for kind, n in o.message_kinds.items():
+        v -= n * costs.action_cost(_MSG_COST_KIND.get(kind, "sms"))
+    if o.revoked:
+        v -= costs.ltv_estimate(o.amount)
+    return v
+
+
+def attach_net_value(outcomes: list[Outcome], costs) -> None:
+    for o in outcomes:
+        o.net_value = round(net_value(o, costs), 2)
+
 
 def summarise(outcomes: list[Outcome]) -> dict:
     n = len(outcomes)
@@ -16,11 +45,15 @@ def summarise(outcomes: list[Outcome]) -> dict:
     attempts = sum(o.attempts_used for o in outcomes)
     messages = sum(o.messages_sent for o in outcomes)
     revoked = sum(o.revoked for o in outcomes)
+    blocked = sum(o.blocked_actions for o in outcomes)
     dtr = [o.days_to_recovery for o in rec if o.days_to_recovery is not None]
 
+    nv = [o.net_value for o in outcomes if hasattr(o, "net_value")]
     return {
         "n": n,
         "recovered_rs": round(recovered_rs, 0),
+        "net_value": round(float(sum(nv)), 0) if nv else None,
+        "net_value_per_case": round(float(np.mean(nv)), 1) if nv else None,
         "recovery_rate": round(len(rec) / n, 4),
         "on_time_rate": round(sum(o.recovered_on_time for o in outcomes) / n, 4),
         "attempts": attempts,
@@ -32,6 +65,7 @@ def summarise(outcomes: list[Outcome]) -> dict:
         "recovered_late": int(sum(o.recovered and not o.recovered_on_time for o in outcomes)),
         "cycles_missed": int(sum(o.cycle_missed for o in outcomes)),
         "escalated": int(sum(o.escalated for o in outcomes)),
+        "blocked_actions": int(blocked),
         "unresolved": int(sum(o.stop_reason in ("plan_exhausted", "max_rounds", "unresolved")
                               and not o.recovered and not o.revoked for o in outcomes)),
         "mean_days_to_recovery": round(float(np.mean(dtr)), 2) if dtr else None,

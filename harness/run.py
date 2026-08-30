@@ -17,7 +17,7 @@ import yaml
 
 from baselines import ALL as BASELINES
 from .engine import HarnessConfig, run_batch, run_case
-from .metrics import by_key, exception_list, paired_delta, summarise
+from .metrics import attach_net_value, by_key, exception_list, paired_delta, summarise
 
 
 def _registry() -> dict:
@@ -50,6 +50,7 @@ def _fmt_rs(x) -> str:
 
 def print_table(summaries: dict[str, dict]) -> None:
     cols = [
+        ("net_value", "NET VALUE", _fmt_rs),
         ("recovered_rs", "RECOVERED", _fmt_rs),
         ("recovery_rate", "RATE", lambda v: f"{v:.1%}"),
         ("attempts", "ATT", str),
@@ -59,6 +60,7 @@ def print_table(summaries: dict[str, dict]) -> None:
         ("mandates_preserved_rate", "PRESERVED", lambda v: f"{v:.1%}"),
         ("mandates_revoked", "REVOKED", str),
         ("escalated", "ESC", str),
+        ("blocked_actions", "BLOCKED", str),
         ("mean_days_to_recovery", "d->REC", lambda v: f"{v:.1f}" if v else "-"),
     ]
     name_w = max(len(n) for n in summaries) + 2
@@ -98,6 +100,12 @@ def main() -> None:
 
     policies = _policies(args.policies)
     runs = {p.name: run_batch(cases, truth, p, cfg, args.seed) for p in policies}
+
+    from agent.costs import CostModel
+    costs = CostModel.from_yaml()
+    for outs in runs.values():
+        attach_net_value(outs, costs)
+
     summaries = {name: summarise(outs) for name, outs in runs.items()}
 
     print(f"\nRecoup harness — {len(cases)} cases, world seed {args.seed}\n")
@@ -109,10 +117,13 @@ def main() -> None:
         for name, outs in runs.items():
             if name == "fixed_schedule":
                 continue
+            d_nv = paired_delta(outs, base, "net_value", seed=args.seed)
             d_rs = paired_delta(outs, base, "amount_recovered", seed=args.seed)
             d_mp = paired_delta(outs, base, "mandate_preserved", seed=args.seed)
-            print(f"  {name:16s}  Rs {d_rs['mean']:+8.1f}/case  CI {d_rs['ci95']}"
-                  f"  (total Rs {d_rs['total']:+,.0f})   mandates {d_mp['mean']:+.3f}/case CI {d_mp['ci95']}")
+            print(f"  {name:16s}  net Rs {d_nv['mean']:+9.1f}/case CI {d_nv['ci95']}"
+                  f"  (total Rs {d_nv['total']:+,.0f})")
+            print(f"  {'':16s}  recovered Rs {d_rs['mean']:+8.1f}/case  mandates "
+                  f"{d_mp['mean']:+.3f}/case CI {d_mp['ci95']}")
 
     os.makedirs(args.out, exist_ok=True)
     payload = {

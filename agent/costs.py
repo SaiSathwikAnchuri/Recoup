@@ -34,8 +34,9 @@ class CostModel:
     ltv_survival_haircut: float
     fatigue_window_days: int
     fatigue_multiplier: float
-    retries_per_cycle: int
-    retry_min_gap_days: int
+    rev_message_bump: dict          # message kind -> believed integrated revocation-prob bump
+    silent_retry_bump: float
+    reauth_success_belief: float
 
     # -- action side --------------------------------------------------------
     def action_cost(self, kind: str) -> float:
@@ -68,13 +69,25 @@ class CostModel:
         (1-based) sent inside `fatigue_window_days`."""
         return self.fatigue_multiplier ** max(0, k_in_window - 1)
 
+    # -- revocation risk -----------------------------------------------
+    def message_revocation_bump(self, kind: str) -> float:
+        """Believed increase in P(revocation) from sending one message of `kind`."""
+        try:
+            return float(self.rev_message_bump[kind])
+        except KeyError:
+            raise KeyError(f"no revocation bump for message kind {kind!r}") from None
+
+    def revocation_cost(self, kind: str, amount: float) -> float:
+        """Rupee cost of the revocation risk one message adds to a *live* mandate."""
+        return self.message_revocation_bump(kind) * self.ltv_estimate(amount)
+
     # -- loader ----------------------------------------------------------
     @classmethod
     def from_yaml(cls, path: str | Path | None = None) -> "CostModel":
         cfg = yaml.safe_load(Path(path or _DEFAULT_PATH).read_text(encoding="utf-8"))
         ltv = cfg["ltv"]
         fatigue = cfg["message_fatigue"]
-        budget = cfg["attempt_budget"]
+        rev = cfg["revocation_belief"]
         return cls(
             action=dict(cfg["action_cost"]),
             value_per_recovery_frac=float(cfg["value_per_recovery_frac"]),
@@ -85,6 +98,7 @@ class CostModel:
             ltv_survival_haircut=float(ltv["survival_haircut"]),
             fatigue_window_days=int(fatigue["window_days"]),
             fatigue_multiplier=float(fatigue["multiplier"]),
-            retries_per_cycle=int(budget["retries_per_cycle"]),
-            retry_min_gap_days=int(budget["retry_min_gap_days"]),
+            rev_message_bump=dict(rev["message_bump"]),
+            silent_retry_bump=float(rev["silent_retry_failure_bump"]),
+            reauth_success_belief=float(rev["reauth_success_belief"]),
         )

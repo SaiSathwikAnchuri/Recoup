@@ -13,10 +13,13 @@ train:
 harness:
 	$(PY) -m harness.run --seed 42
 
+audit:
+	$(PY) -m agent.audit --seed 42 --sqlite
+
 test:
 	$(PY) -m pytest -q
 
-reproduce: data train harness test
+reproduce: data train harness audit test
 
 show:
 	$(PY) -m simulator.show $(CASE)

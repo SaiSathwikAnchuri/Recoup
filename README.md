@@ -3,10 +3,12 @@
 **A cost-aware recovery policy for failed UPI AutoPay mandate debits.**
 Razorpay AI Buildathon · Track 03 — AI Revenue Recovery.
 
-> **Result:** _`Across N simulated mandate failures, Recoup recovered ₹X against ₹Y for
-> fixed-schedule retry — using Z% fewer attempts and revoking M fewer mandates. It
-> escalated K cases it could not resolve.`_
-> *(placeholder — filled from real runs once the policy and harness land)*
+> **Result (400 simulated mandate failures, seed 42):** Recoup recovered **₹717k** against
+> **₹302k** for fixed-schedule retry, on **45% fewer debit attempts** (544 vs 994) and
+> **~⅕ the messages**, while preserving **25 more mandates**. Net of action cost, the
+> missed-cycle penalty and lost-mandate LTV, that is **+₹2,397 per case (95% CI
+> [+₹1,315, +₹3,648])**. It escalated **27** cases it judged not worth pursuing, each with
+> a logged rationale.
 
 ## The problem, in three sentences
 
@@ -31,34 +33,54 @@ Full write-up: **`docs/`** / the project report artifact.
 | **3** | Cost model — `config/costs.yaml` + `agent/costs.py` (action costs, LTV estimate, missed-cycle penalty, compounding message fatigue) | ✅ done |
 | **4** | Calibrated cause classifier (`agent/classifier.py`) + `cause_aware` escalate branch | ✅ done |
 | **5** | Liquidity-window model (`agent/liquidity.py`) — quantile funding-day prediction + `liquidity_aware` policy | ✅ done |
-| 6 | Constraint layer + property tests | ⬜ |
-| 7 | Cost-aware policy | ⬜ |
-| 8 | Audit trail + LLM explain layer | ⬜ |
+| **6** | Constraint filter (`harness/constraints.py` + `config/constraints.yaml`) — retry cap, min gaps, quiet hours, message cap; enforced structurally on every plan + property tests | ✅ done |
+| **7** | Cost-aware EV policy (`agent/ev_policy.py`, `recoup`) — per-case expected-value decision over retry / re-auth / do-nothing | ✅ done |
+| **8** | Audit trail (`agent/audit.py`, JSONL + SQLite) + optional cached LLM prose (`agent/llm_explain.py`) | ✅ done |
 | 9 | Oracle, ablations, sensitivity, fairness slice, video | ⬜ |
 
 ### Where things stand (400 cases, seed 42)
 
-| Policy | Recovered | Rate | Attempts | Msg/case | On-time | Preserved | Escalated |
-|--------|----------:|-----:|---------:|---------:|--------:|----------:|----------:|
-| `never_act` (floor) | ₹0 | 0.0% | 0 | 0.00 | 0.0% | 88.0% | 0 |
-| `fixed_schedule` (Baseline A) | ₹302,303 | 32.8% | 994 | 0.73 | 30.0% | 88.0% | 0 |
-| `always_nudge` (Baseline B) | ₹301,066 | 31.5% | 970 | 1.45 | 25.8% | 86.5% | 0 |
-| `cause_aware` (Phase 4 — + escalate branch) | ₹386,543 | 42.5% | 804 | 0.74 | 39.8% | 89.2% | 24 |
-| `liquidity_aware` (Phase 5 — + funding-window timing) | ₹724,340 | 73.5% | 553 | 0.17 | 26.0% | 94.2% | 24 |
-| _perfect-timing reference (single retry, no re-auth)_ | _₹695,950_ | _67.5%_ | _298_ | _0.00_ | — | _93.0%_ | — |
+The scoreboard reports **net value** — rupees recovered, *minus* action spend, the
+missed-cycle penalty on late recoveries, and the believed LTV of every revoked mandate.
+That is the objective `recoup` optimises; raw recovery rate is a proxy that hides the
+revocation losses.
 
-Each policy adds **one idea** so the harness can price it in isolation:
+| Policy | Net value | Recovered | Rate | Attempts | Msg/case | On-time | Preserved | Esc |
+|--------|----------:|----------:|-----:|---------:|---------:|--------:|----------:|----:|
+| `never_act` (floor) | −₹901,690 | ₹0 | 0.0% | 0 | 0.00 | 0.0% | 88.0% | 0 |
+| `fixed_schedule` (Baseline A) | −₹848,435 | ₹302,303 | 32.8% | 994 | 0.73 | 30.0% | 88.0% | 0 |
+| `always_nudge` (Baseline B) | −₹823,183 | ₹290,712 | 31.0% | 966 | 1.81 | 25.5% | 85.5% | 0 |
+| `cause_aware` (Phase 4 — escalate branch) | −₹630,945 | ₹386,543 | 42.5% | 804 | 0.74 | 39.8% | 89.2% | 24 |
+| `liquidity_aware` (Phase 5 — window timing) | +₹68,912 | ₹724,340 | 73.5% | 553 | 0.17 | 26.0% | 94.2% | 24 |
+| **`recoup` (Phase 7 — EV decision)** | **+₹110,237** | ₹717,314 | 71.8% | 544 | 0.17 | 30.0% | 94.2% | 27 |
 
-- **`cause_aware`** — when the calibrated classifier is confident the mandate is dead
-  (P ≥ 0.30, ~90% precision), stop retrying, send one re-auth, hand to a human.
-  **+₹84k** (paired 95% CI [+₹116, +₹329]/case, excludes zero); a re-auth revives ~57%
-  of dead mandates that retries never touch.
-- **`liquidity_aware`** — for everything not dead, schedule retries at the model's
-  predicted **p50 / p85 funding days** instead of days 1/3/7; a limit-breach waits for
-  the cap to reset on the 1st. **+₹422k vs fixed_schedule** (CI [+₹795, +₹1,353]/case),
-  on **fewer attempts** (553 vs 994) and **fewer messages**, with mandate preservation
-  up to 94%. The cost: recovery lands ~17 days out, so on-time rate drops to 26% — the
-  trade the Phase 7 EV policy will make deliberately, against the missed-cycle penalty.
+**Every plan** first passes the structural constraint filter (`config/constraints.yaml`):
+≤ 3 retries ≥ 24 h apart, ≤ 4 messages ≥ 20 h apart, nothing 21:00–09:00 IST. Illegal
+actions are rescheduled or dropped and counted; even a deliberately greedy policy is
+reined in to these caps.
+
+Each policy adds **one idea**, so the harness prices it in isolation:
+
+- **`always_nudge`** — "message harder": ≈ `fixed_schedule` on money (−₹29/case, CI crosses
+  zero) but **worse on mandate preservation** (−0.03/case, CI [−0.05, −0.00]). More dunning
+  contact does not recover more; it churns customers.
+- **`cause_aware`** — a calibrated classifier flags probably-dead mandates (P ≥ 0.30, ~90%
+  precision) → stop retrying, one re-auth, hand off. **+₹84k recovered**, and a re-auth
+  revives ~57% of dead mandates retries never touch.
+- **`liquidity_aware`** — retries at the model's predicted **p50 / p85 funding days**
+  instead of a fixed calendar. **+₹422k recovered vs `fixed_schedule`** on **fewer
+  attempts** (553 vs 994) and near-zero messages — the biggest single jump. It flips net
+  value from −₹848k to **+₹69k**.
+- **`recoup`** — prices every candidate action:
+  `EV = P(success)·recovery_value − action_cost − P(revocation)·LTV − missed_cycle_penalty·P(miss)`,
+  using the classifier for cause, the liquidity model for timing, `costs.yaml` for the
+  economics. It recovers about the same money as `liquidity_aware` but **sooner and more
+  on-time** (30% vs 26%, 16 days vs 17) because it explicitly weighs the missed-cycle
+  penalty; it stops or escalates the cases where nothing has positive EV; and **every
+  decision carries a logged rationale** (`audit/`). Paired vs `fixed_schedule`:
+  **+₹2,397/case net value, 95% CI [+₹1,315, +₹3,648]** · +₹1,038/case recovered ·
+  +0.06 mandates/case preserved. Across 4 world seeds it beats `liquidity_aware` on net
+  value on 3, and on timeliness on all 4.
 
 **Classifier** (`results/classifier_report.json`): test accuracy **0.90** vs a 0.60
 majority prior; **ECE 0.047** calibrated (0.085 uncalibrated); holdout batch 0.885 / 0.056.
@@ -67,6 +89,21 @@ majority prior; **ECE 0.047** calibrated (0.085 uncalibrated); holdout batch 0.8
 11.8 for a modal-day heuristic and 11.8 for fixed-day-7; p85 quantile coverage 0.83
 (0.84 on the holdout batch).
 
+### Audit trail
+
+`recoup` logs a structured record for every case (`audit/audit_42.jsonl` + `.db`):
+cause posterior, funding window, the EV of each candidate action, the decision, and the
+realised outcome — plus a plain-English note:
+
+> _Diagnosis: most likely insufficient balance (87% confidence) — the account was short of
+> funds. Predicted funding window 22–29 days out (billing date at day 21). Decision: retry
+> on day 22, retry on day 29, retry on day 35 (best EV ≈ ₹2,675). Outcome: recovered ₹3,519
+> by retry, late (26 days); 3 attempts, 0 messages._
+
+The note is a deterministic template — no network, always runs. An LLM can rewrite it
+(`--llm`, needs `ANTHROPIC_API_KEY`); calls are cached and never touched by `reproduce`.
+`python -m agent.audit --seed 42 --case c0011` prints one case in full.
+
 ---
 
 ## Reproduce
@@ -74,7 +111,7 @@ majority prior; **ECE 0.047** calibrated (0.085 uncalibrated); holdout batch 0.8
 ```bash
 pip install -r requirements.txt
 
-python tasks.py reproduce        # data + train (classifier + liquidity) + harness + tests
+python tasks.py reproduce        # data + train + harness + audit + tests
 #   or, with make:  make reproduce
 
 python -m simulator.generate --n 400 --seed 42 --out data
@@ -82,7 +119,8 @@ python -m simulator.show c0142 --ledger
 python -m agent.train_classifier          # -> agent/models/cause_clf.pkl + results/classifier_report.json
 python -m agent.train_liquidity           # -> agent/models/liquidity.pkl + results/liquidity_report.json
 python -m harness.run --seed 42
-python -m harness.run --trace c0142 --policy liquidity_aware
+python -m harness.run --trace c0142 --policy recoup
+python -m agent.audit --seed 42 --case c0011      # one decision, in full
 python -m pytest -q
 ```
 
@@ -97,6 +135,7 @@ Outputs (git-ignored):
 | `results/classifier_report.json` | classifier accuracy, calibration (ECE / reliability bins), confusion, escalate-branch precision/recall |
 | `results/liquidity_report.json` | funding-day MAE / median AE / bias, p85 quantile coverage, vs naive baselines |
 | `agent/models/*.pkl` | the trained classifier + liquidity models (regenerated by `train`) |
+| `audit/audit_42.jsonl` / `.db` | one decision record per case — belief, EV of each candidate, choice, rationale, outcome |
 
 ---
 
@@ -144,7 +183,8 @@ NPCI taxonomy.
 
 ```
 config/priors.yaml       cause priors + simulator parameters, each sourced  (hidden-world truth)
-config/costs.yaml        what the AGENT believes actions cost + a mandate is worth  (estimates, not truth)
+config/costs.yaml        what the AGENT believes actions cost + a mandate is worth, incl. revocation-risk beliefs  (estimates, not truth)
+config/constraints.yaml  hard operating limits (retry cap, min gaps, quiet hours, message cap) — enforced structurally
 agent/
   costs.py               loads costs.yaml: action_cost, ltv_estimate, recovery_value, missed_cycle_penalty, message_fatigue_factor
   features.py             observable case -> numeric feature vector (never touches truth)
@@ -154,6 +194,9 @@ agent/
   train_classifier.py     CLI: generate training batch (separate seed), fit + calibrate, tune threshold, report
   train_liquidity.py      CLI: train the funding-day quantile regressors, eval vs naive baselines
   policies.py             cause_aware (Phase 4) + liquidity_aware (Phase 5) — staged, one idea each
+  ev_policy.py            recoup (Phase 7) — the cost-aware expected-value decision + explain()
+  audit.py                Phase 8 — per-case decision record (JSONL + SQLite) + template narration
+  llm_explain.py          optional cached LLM rewrite of the narration (offline-safe fallback)
 simulator/
   customers.py           income patterns, competing debits, cash ledger, back-sim history
   generator.py           assembles one case = observable record + hidden truth
@@ -161,7 +204,9 @@ simulator/
   generate.py            batch CLI
   show.py                human-readable single-case dump
 harness/
-  engine.py              competing-risk rollout: Plan/Action protocol, per-case World, run_case
+  plan.py                the policy <-> harness contract: ScheduledAction, Plan
+  constraints.py         the constraint filter: enforce(plan) -> legal plan + violations  (RBI/NPCI/TRAI + anti-harassment)
+  engine.py              competing-risk rollout: per-case World, run_case; runs every plan through constraints.enforce
   metrics.py             batch summary, paired bootstrap CIs, per-cause/-income splits, exceptions
   run.py                 runner CLI + comparison table + --trace <case_id>
 baselines/
@@ -172,4 +217,9 @@ tests/
   test_generator.py      Phase-1 invariants (day-0 failure is real, no leakage, reproducible, ...)
   test_harness.py        Phase-2 invariants (budget, all-or-nothing, determinism, paired property, ...)
   test_costs.py          Phase-3 invariants (channel-cost ordering, conservative LTV, gentle delay discount, fatigue compounds, no leakage)
+  test_classifier.py     Phase-4 invariants (accuracy beats prior, ECE < 0.1, calibration helps, escalate precision, no leakage)
+  test_liquidity.py      Phase-5 invariants (observable-only, beats naive MAE, p85 quantile coverage, roundtrip)
+  test_constraints.py    Phase-6 property tests (fuzzed plans come out legal, idempotent, greedy policy reined in)
+  test_ev_policy.py      Phase-7 invariants (well-formed plans, restraint, dead->reauth, beats fixed_schedule on net value)
+  test_audit.py          Phase-8 invariants (structured record, deterministic narration, SQLite roundtrip, LLM fallback)
 ```

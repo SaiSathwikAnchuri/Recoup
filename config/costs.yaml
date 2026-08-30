@@ -65,8 +65,20 @@ message_fatigue:
                             # mirrors the simulator's hidden fatigue_multiplier (1.4) — which the agent does not get to see.
 
 # ---------------------------------------------------------------------------
-# hard operating limits
+# revocation-risk beliefs — the agent's estimate of how much one action raises
+# P(the customer revokes the mandate), INTEGRATED over the action's whole effect
+# window (not per day). The EV policy multiplies this by ltv_estimate to price
+# the risk of an action against a *live* mandate. Deliberately not equal to the
+# simulator's hidden revocation.message_bump table.
 # ---------------------------------------------------------------------------
-attempt_budget:
-  retries_per_cycle: 3      # NPCI / mandate cap on debit attempts per cycle. (VERIFY against current NPCI UPI AutoPay rules — report R6)
-  retry_min_gap_days: 1     # no two debit attempts within 24h.
+revocation_belief:
+  message_bump:
+    sms:    0.045          # failure-framed SMS — the channel customers hate most. (ESTIMATE)
+    nudge:  0.004          # pre-debit notification — barely registers. (ESTIMATE)
+    reauth: 0.080          # re-auth request — high friction (PIN re-entry, bank-app round trip). (ESTIMATE)
+  silent_retry_failure_bump: 0.003   # a silently failed debit attempt, on its own — much milder than a message. (ESTIMATE)
+  reauth_success_belief: 0.60        # P(customer completes re-auth when asked). sim's hidden mean ~0.57 dead / ~0.84 live. (ESTIMATE)
+
+# Hard operating limits (retry cap, min gaps, quiet hours) live in
+# config/constraints.yaml — they are enforced structurally by the harness, not
+# priced. This file is only about what things cost.

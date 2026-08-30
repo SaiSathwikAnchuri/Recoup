@@ -80,5 +80,7 @@ def load_all() -> list:
         return []
     out = [CauseAwareRetry()]
     if LiquidityModel.default_exists():
+        from .ev_policy import EVPolicy
         out.append(LiquidityAwareRetry())
+        out.append(EVPolicy())
     return out

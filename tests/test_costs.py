@@ -10,8 +10,8 @@ CM = CostModel.from_yaml()
 
 
 def test_loads_from_default_yaml():
-    assert CM.retries_per_cycle == 3
-    assert CM.retry_min_gap_days >= 1
+    assert CM.ltv_months == 12
+    assert 0 < CM.value_per_recovery_frac <= 1
 
 
 def test_all_action_costs_present_and_nonneg():

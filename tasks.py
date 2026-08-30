@@ -3,8 +3,9 @@
     python tasks.py data          # regenerate data/ from config/priors.yaml
     python tasks.py train         # train + calibrate the cause classifier and the liquidity model
     python tasks.py harness       # run policies over the batch, print comparison
+    python tasks.py audit         # write audit/audit_42.jsonl (per-case decision + reason + outcome)
     python tasks.py test          # run the test suite
-    python tasks.py reproduce     # data + train + harness + tests, the canonical end-to-end check
+    python tasks.py reproduce     # data + train + harness + audit + tests, the canonical end-to-end check
     python tasks.py show c0001    # dump one case
 """
 
@@ -29,6 +30,8 @@ def main() -> int:
         return rc or run(*PY, "-m", "agent.train_liquidity")
     if cmd == "harness":
         return run(*PY, "-m", "harness.run", "--seed", "42", *rest)
+    if cmd == "audit":
+        return run(*PY, "-m", "agent.audit", "--seed", "42", "--sqlite", *rest)
     if cmd == "test":
         return run(*PY, "-m", "pytest", "-q")
     if cmd == "show":
@@ -38,6 +41,7 @@ def main() -> int:
         rc = rc or run(*PY, "-m", "agent.train_classifier")
         rc = rc or run(*PY, "-m", "agent.train_liquidity")
         rc = rc or run(*PY, "-m", "harness.run", "--seed", "42")
+        rc = rc or run(*PY, "-m", "agent.audit", "--seed", "42", "--sqlite")
         return rc or run(*PY, "-m", "pytest", "-q")
     print(__doc__)
     return 2

@@ -10,3 +10,6 @@ agent/models/
 .DS_Store
 
 .cache/
+audit/*.jsonl
+audit/*.db
+audit/llm_cache.json

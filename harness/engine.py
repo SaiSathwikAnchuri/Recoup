@@ -23,34 +23,20 @@ import numpy as np
 from simulator.calendar_utils import add_months, ist, parse_dt
 from simulator.response import p_success, revocation_hazard, truth_from_record
 
+from .constraints import Constraints, enforce
+from .plan import DEBIT_HOUR, Plan, ScheduledAction  # noqa: F401  (re-exported)
+
 # action kind -> revocation-hazard message key in priors.revocation.message_bump
 MESSAGE_KIND = {
     "nudge": "predebit_notification",
     "sms": "sms_failure_framed",
     "reauth": "reauth_request",
 }
-DEBIT_HOUR = 11
 
 
 # ---------------------------------------------------------------------------
 # policy-facing types
 # ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class ScheduledAction:
-    at: datetime
-    kind: str  # "retry" | "nudge" | "sms" | "reauth"
-
-    def __post_init__(self):
-        if self.kind not in ("retry", "nudge", "sms", "reauth"):
-            raise ValueError(f"bad action kind: {self.kind}")
-
-
-@dataclass
-class Plan:
-    actions: list[ScheduledAction]
-    terminal: str = "stop"  # "stop" | "escalate" | "replan"
-
-
 @dataclass
 class EngagementState:
     """Read-only-by-convention view the policy gets on each (re)plan."""
@@ -73,10 +59,17 @@ class EngagementState:
 # ---------------------------------------------------------------------------
 @dataclass
 class HarnessConfig:
-    attempt_budget: int = 3          # retries per cycle (mandate terms; moves to config in Phase 6)
     max_rounds: int = 6              # replanning rounds before forced stop
+    rev_cfg: dict = field(default_factory=dict)          # priors["revocation"]
+    constraints: Constraints | None = None              # config/constraints.yaml
 
-    rev_cfg: dict = field(default_factory=dict)   # priors["revocation"]
+    def __post_init__(self):
+        if self.constraints is None:
+            self.constraints = Constraints.from_yaml()
+
+    @property
+    def attempt_budget(self) -> int:
+        return self.constraints.max_retries
 
 
 def _case_seed(case_id: str, run_seed: int) -> int:
@@ -121,6 +114,7 @@ class Outcome:
     mandate_preserved: bool
     cycle_missed: bool
     escalated: bool
+    blocked_actions: int
     stop_reason: str
     timeline: list[dict]
 
@@ -158,6 +152,26 @@ def run_case(case: dict, truth_rec: dict, policy, cfg: HarnessConfig, run_seed: 
     stop_reason = ""
     cursor_day = 0          # revocation has been resolved for all days < cursor_day
     last_action_day = 0
+    blocked_actions = 0
+
+    def legalize(raw_plan: Plan) -> Plan:
+        """Run the policy's plan through the structural constraint filter, carrying
+        forward the retries / messages already spent this engagement."""
+        nonlocal blocked_actions
+        prior_r = tuple(parse_dt(e["at"]) for e in state.history
+                        if e.get("action") == "retry" and "at" in e)
+        prior_m = tuple(observed_at + timedelta(days=d, hours=DEBIT_HOUR)
+                        for d, _ in state.messages)
+        legal, viol = enforce(raw_plan, observed_at=observed_at, horizon_end=horizon_end,
+                              c=cfg.constraints, prior_retries=prior_r, prior_messages=prior_m)
+        if raw_plan.note:
+            timeline.append({"day": day_of(state.now or observed_at),
+                             "action": "plan", "note": raw_plan.note})
+        for v in viol:
+            blocked_actions += 1
+            timeline.append({"day": day_of(parse_dt(v["at"])), "action": v["action"],
+                             "result": f"constraint:{v['rule']}:{v['resolution']}"})
+        return legal
 
     def roll_revocation(upto_day: int) -> bool:
         """Resolve revocation for [cursor_day, upto_day). Returns True if it fired."""
@@ -175,7 +189,7 @@ def run_case(case: dict, truth_rec: dict, policy, cfg: HarnessConfig, run_seed: 
             cursor_day += 1
         return False
 
-    plan = policy.plan(case, state)
+    plan = legalize(policy.plan(case, state))
     while True:
         state.round += 1
         actions = sorted((a for a in plan.actions if observed_at <= a.at <= horizon_end),
@@ -228,11 +242,15 @@ def run_case(case: dict, truth_rec: dict, policy, cfg: HarnessConfig, run_seed: 
                 if ok:
                     recovered, recovered_at, via_reauth = True, a.at, True
                     break
+                if plan.terminal == "replan":
+                    state.now = a.at
+                    replanned = True
+                    break
 
         if recovered or revoked:
             break
         if replanned and state.round < cfg.max_rounds:
-            plan = policy.plan(case, state)
+            plan = legalize(policy.plan(case, state))
             continue
 
         # plan finished without recovery / revocation
@@ -265,7 +283,7 @@ def run_case(case: dict, truth_rec: dict, policy, cfg: HarnessConfig, run_seed: 
         days_to_recovery=round(days_to_recovery, 2) if days_to_recovery is not None else None,
         attempts_used=state.attempts_used, messages_sent=len(state.messages), message_kinds=mk,
         revoked=revoked, mandate_preserved=not revoked,
-        cycle_missed=not on_time, escalated=escalated,
+        cycle_missed=not on_time, escalated=escalated, blocked_actions=blocked_actions,
         stop_reason=stop_reason or ("recovered" if recovered else "revoked" if revoked else "unresolved"),
         timeline=timeline,
     )

@@ -1,0 +1,25 @@
+# Recoup — hard operating limits on any recovery plan.
+#
+# RBI / NPCI / TRAI rules plus anti-harassment guardrails. Enforced STRUCTURALLY:
+# harness/engine.py runs every policy's Plan through harness/constraints.py before
+# executing it, so NO policy — baseline or agent — can emit an illegal sequence.
+# It is a filter on actions, not a line in a prompt.
+#
+# An action that breaks a rule is either RESCHEDULED forward to the first legal
+# slot, or DROPPED if no legal slot fits before the horizon. Every drop / move is
+# logged (Outcome.blocked_actions, and the timeline).
+#
+# Figures tagged (VERIFY) need a current NPCI / RBI / TRAI circular before
+# submission (report R6). Limits are applied over the whole engagement window
+# (~45 days), which is at least as strict as the real per-cycle caps.
+
+retry:
+  max_per_engagement: 3     # NPCI cap on auto-debit retry attempts per mandate per cycle. (VERIFY)
+  min_gap_hours: 24         # no two debit attempts within 24h. (VERIFY)
+
+messaging:
+  max_per_engagement: 4     # anti-harassment cap on customer-facing messages (nudge / sms / reauth). (ESTIMATE)
+  min_gap_hours: 20         # space dunning contact by ~a day. (ESTIMATE)
+  quiet_hours: [21, 9]      # no message delivered between 21:00 and 09:00 IST; reschedule to 09:00. (TRAI commercial-comms norms) (VERIFY)
+
+respect_horizon: true       # drop anything scheduled past the engagement window (the engine drops these too)
