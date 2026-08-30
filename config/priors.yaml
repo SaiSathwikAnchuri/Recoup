@@ -1,0 +1,108 @@
+# Recoup — cause priors and simulator parameters.
+#
+# Every number is ILLUSTRATIVE and calibrated to PUBLIC aggregates, not production data.
+# Each carries a SOURCE tag or is marked ESTIMATE. Figures tagged (VERIFY) still need a
+# working citation in the README before submission — see report recommendation R1.
+#
+# rows/keys that feed the hidden ground truth the agent never sees.
+
+seed: 42
+horizon_days: 45          # ~2 UPI AutoPay billing cycles
+history_months: 11        # prior cycles used to build the observable success history
+
+# ---------------------------------------------------------------------------
+# P(true cause) at the moment of a failed AutoPay debit
+# ---------------------------------------------------------------------------
+cause_mix:
+  insufficient_balance: 0.60   # SOURCE: dominant UPI AutoPay failure mode; NPCI monthly data + press (VERIFY)
+  bank_downtime:        0.15   # SOURCE: NPCI beneficiary/remitter-bank-offline share; spikes in incidents (VERIFY)
+  limit_breach:         0.10   # ESTIMATE: per-account AutoPay cap / per-transaction limit breaches
+  mandate_dead:         0.15   # ESTIMATE: revoked-at-bank / mandate-not-found; rises with mandate age
+
+income_pattern_mix:
+  salaried: 0.55         # ESTIMATE: urban recurring-payment base skews salaried
+  gig:      0.30
+  business: 0.15
+
+# ---------------------------------------------------------------------------
+# insufficient_balance dynamics
+# ---------------------------------------------------------------------------
+insufficient_balance:
+  shortfall_frac_range: [0.05, 0.85]    # day-0 balance as a fraction of the debit amount
+  unrecoverable_frac: 0.10              # share of IB cases that never fund within the horizon
+  success_logistic_scale_frac: 0.15     # logistic slope, as a fraction of the debit amount
+
+# ---------------------------------------------------------------------------
+# bank_downtime dynamics
+# ---------------------------------------------------------------------------
+bank_downtime:
+  outage_mean_hours: 6.0                # SOURCE: typical bank-side incident duration; Exp-distributed (VERIFY)
+  outage_min_hours: 0.5
+  p_success_during_outage: 0.03
+  recurring_outage_prob: 0.15           # chance of a second short outage later in the horizon
+
+# ---------------------------------------------------------------------------
+# limit_breach dynamics
+# ---------------------------------------------------------------------------
+limit_breach:
+  p_success_before_reset: 0.02
+  # cap resets on the 1st of the next month (cycle boundary)
+
+# ---------------------------------------------------------------------------
+# mandate_dead dynamics
+# ---------------------------------------------------------------------------
+mandate_dead:
+  reauth_success_prob_beta: [4, 3]      # Beta(a,b); mean ~0.57 that the customer completes re-auth
+
+# ---------------------------------------------------------------------------
+# baseline execution reliability (applies to every cause)
+# ---------------------------------------------------------------------------
+max_success_prob: 0.93                  # generic tech-failure floor even when everything is fine
+
+# ---------------------------------------------------------------------------
+# revocation hazard — the competing risk (consumed by the Phase 2 harness)
+# ---------------------------------------------------------------------------
+revocation:
+  h_base_daily:                         # ESTIMATE: baseline daily P(customer revokes the mandate)
+    salaried: 0.0020
+    gig:      0.0040
+    business: 0.0030
+  message_bump:                         # additive to the daily hazard; decays linearly over decay_days
+    sms_failure_framed:    {bump: 0.020, decay_days: 3}
+    predebit_notification: {bump: 0.002, decay_days: 1}
+    reauth_request:        {bump: 0.030, decay_days: 4}
+    silent_retry_failed:   {bump: 0.003, decay_days: 2}
+  fatigue_multiplier: 1.4               # k-th message within 7 days multiplies its bump by 1.4^(k-1)
+
+# ---------------------------------------------------------------------------
+# lifetime value (for the revocation cost term)
+# ---------------------------------------------------------------------------
+ltv:
+  months: 12                            # ESTIMATE: assumed mandate lifetime
+  retention_factor_range: [0.7, 1.0]    # per-customer noise on realised LTV
+
+# ---------------------------------------------------------------------------
+# failure-code ambiguity (report R5): the observed code is NOT a clean signal of cause.
+# rows = true cause; entries = P(observed code token | true cause).
+#
+# NOTE: code strings below are PLACEHOLDERS. Reconcile with the real Razorpay
+# Subscriptions API / NPCI UPI decline taxonomy before submission (report R6).
+# ---------------------------------------------------------------------------
+failure_code_emission:
+  insufficient_balance:
+    U30_insufficient_funds: 0.72
+    U69_generic_decline:    0.20
+    ER_mandate_issue:       0.03
+    U16_risk_declined:      0.05
+  bank_downtime:
+    U88_bank_offline:       0.55
+    U69_generic_decline:    0.35
+    U30_insufficient_funds: 0.10
+  limit_breach:
+    U67_limit_exceeded:     0.60
+    U69_generic_decline:    0.30
+    U30_insufficient_funds: 0.10
+  mandate_dead:
+    ER_mandate_revoked:     0.58
+    ER_mandate_issue:       0.22
+    U69_generic_decline:    0.20

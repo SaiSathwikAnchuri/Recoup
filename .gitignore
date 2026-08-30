@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/
+audit/*.db
+.pytest_cache/
+results/*.png
+agent/models/
+.DS_Store

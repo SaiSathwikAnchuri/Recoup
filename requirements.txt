@@ -1,0 +1,4 @@
+numpy>=1.26
+PyYAML>=6.0
+scikit-learn>=1.5
+pytest>=8.0

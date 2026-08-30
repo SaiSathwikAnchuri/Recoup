@@ -1,0 +1,87 @@
+{
+  "train_n": 4200,
+  "test_n": 1800,
+  "train_seed": 1000,
+  "model_path": "C:\\Users\\HP\\HACKATHON-PROJECTS\\RAZORPAY-HACKATHON\\agent\\models\\cause_clf.pkl",
+  "test": {
+    "accuracy": 0.8956,
+    "prior_baseline": 0.6,
+    "ece_calibrated": 0.047,
+    "ece_uncalibrated": 0.0847,
+    "mce_calibrated": 0.3878,
+    "brier_calibrated": 0.1736,
+    "brier_uncalibrated": 0.2057,
+    "confusion": {
+      "insufficient_balance": {
+        "insufficient_balance": 1083,
+        "bank_downtime": 5,
+        "limit_breach": 0,
+        "mandate_dead": 0
+      },
+      "bank_downtime": {
+        "insufficient_balance": 113,
+        "bank_downtime": 151,
+        "limit_breach": 0,
+        "mandate_dead": 10
+      },
+      "limit_breach": {
+        "insufficient_balance": 47,
+        "bank_downtime": 1,
+        "limit_breach": 100,
+        "mandate_dead": 6
+      },
+      "mandate_dead": {
+        "insufficient_balance": 0,
+        "bank_downtime": 6,
+        "limit_breach": 0,
+        "mandate_dead": 278
+      }
+    }
+  },
+  "escalate_branch": {
+    "threshold": 0.3,
+    "precision": 0.901,
+    "recall": 0.989,
+    "n_flagged": 312,
+    "target_precision": 0.85
+  },
+  "holdout_harness_batch": {
+    "n": 400,
+    "accuracy": 0.885,
+    "ece": 0.0564,
+    "brier": 0.1928,
+    "confusion": {
+      "insufficient_balance": {
+        "insufficient_balance": 246,
+        "bank_downtime": 2,
+        "limit_breach": 0,
+        "mandate_dead": 0
+      },
+      "bank_downtime": {
+        "insufficient_balance": 24,
+        "bank_downtime": 30,
+        "limit_breach": 0,
+        "mandate_dead": 5
+      },
+      "limit_breach": {
+        "insufficient_balance": 12,
+        "bank_downtime": 1,
+        "limit_breach": 18,
+        "mandate_dead": 2
+      },
+      "mandate_dead": {
+        "insufficient_balance": 0,
+        "bank_downtime": 0,
+        "limit_breach": 0,
+        "mandate_dead": 60
+      }
+    },
+    "escalate_branch": {
+      "threshold": 0.3,
+      "precision": 0.896,
+      "recall": 1.0,
+      "n_flagged": 67,
+      "n_dead": 60
+    }
+  }
+}

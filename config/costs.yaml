@@ -1,0 +1,72 @@
+# Recoup — cost model.
+#
+# What the AGENT BELIEVES each action costs, and what it believes a live mandate
+# is worth. The Phase 7 policy prices every candidate action against these numbers:
+#
+#   EV(action) = P(success) * recovery_value(amount, delay)
+#              - action_cost(kind)
+#              - P(revocation attributable to action) * ltv_estimate(amount)
+#              - missed_cycle_penalty(amount) * P(not recovered before cycle close)
+#
+# These are ESTIMATES on purpose. They are deliberately NOT equal to the
+# simulator's hidden parameters (config/priors.yaml) — a real deployment prices
+# actions on beliefs, and Phase 9 sensitivity-tests how wrong they can be before
+# the policy ordering flips. Numbers tagged (VERIFY) need a Razorpay / NPCI
+# citation in the README before submission (report R1).
+#
+# `agent/` never imports `simulator/response.py`; this file is the agent side of
+# that no-leakage boundary (report R3).
+
+# ---------------------------------------------------------------------------
+# direct operational cost of executing one action, in rupees.
+# revocation / annoyance risk is NOT here — it is priced via ltv_estimate and
+# the revocation hazard the policy carries separately.
+# ---------------------------------------------------------------------------
+action_cost:
+  retry:            0.40   # repeat UPI AutoPay debit: sub-rupee PSP / switch fee + webhook & reconciliation overhead.
+                           # the real cost of a retry is that it burns 1 of <=3 permitted attempts (see attempt_budget). (VERIFY: Razorpay UPI AutoPay pricing)
+  nudge:            0.15   # in-app / push / the NPCI-mandated 24h pre-debit notification. FCM/APNs ~free; covers campaign tooling.
+  sms:              0.30   # DLT transactional SMS, ~2 parts, aggregator + markup (India ~Rs 0.12-0.22 per part). (VERIFY)
+  whatsapp:         0.55   # Meta utility-template conversation + BSP markup. better read rate than SMS, costlier. (VERIFY)
+  reauth:           0.35   # message carrying the re-authorisation deep link (~sms + tooling). PIN-entry friction is priced in the hazard, not here.
+  human_escalation: 30.00  # route to an ops / collections agent: ~6 min at a fully-loaded ~Rs 300/hr. this is what `terminal=escalate` costs.
+
+# ---------------------------------------------------------------------------
+# benefit side
+# ---------------------------------------------------------------------------
+value_per_recovery_frac: 1.0     # a recovered debit is worth its full face amount (this is the headline metric).
+
+delay_discount_per_day: 0.003    # recovered value *= (1 - 0.003)^days_elapsed. ~0.3%/day: time-value + slow churn drift.
+                                 # ~12% haircut across a 45-day horizon. gentle on purpose — the revocation hazard carries the urgency. (ESTIMATE)
+
+missed_cycle_penalty_frac: 0.35  # of the debit amount, charged when recovery lands AFTER the next billing date.
+                                 # not a total loss (the money did arrive) — covers a full cycle of dunning cost,
+                                 # delayed revenue recognition, and an elevated churn hazard throughout. (ESTIMATE — Phase 9 sensitivity)
+
+# ---------------------------------------------------------------------------
+# what a live mandate is worth (the revocation-cost multiplier)
+# ---------------------------------------------------------------------------
+ltv:
+  months: 12               # conservative assumed mandate lifetime. many last longer; some churn sooner. (ESTIMATE)
+  monthly_value_frac: 1.0   # the recurring debit amount is the monthly value at risk on churn.
+  survival_haircut: 0.70    # fraction of "saved" mandates that would actually have survived the horizon anyway —
+                            # stops the policy over-crediting mandate preservation.
+  # => ltv_estimate = amount * 1.0 * 12 * 0.70 = 8.4x the debit amount.
+  #    the simulator's hidden ltv_true averages ~ amount * 12 * U(0.7, 1.0) ~ 10.2x,
+  #    so the agent's estimate is deliberately conservative — it should not be more
+  #    sure a mandate is valuable than reality warrants.
+
+# ---------------------------------------------------------------------------
+# messaging fatigue (compounding)
+# ---------------------------------------------------------------------------
+message_fatigue:
+  window_days: 7            # messages inside a rolling 7-day window compound.
+  multiplier: 1.35          # believed annoyance cost of the k-th message in-window *= 1.35^(k-1).
+                            # mirrors the simulator's hidden fatigue_multiplier (1.4) — which the agent does not get to see.
+
+# ---------------------------------------------------------------------------
+# hard operating limits
+# ---------------------------------------------------------------------------
+attempt_budget:
+  retries_per_cycle: 3      # NPCI / mandate cap on debit attempts per cycle. (VERIFY against current NPCI UPI AutoPay rules — report R6)
+  retry_min_gap_days: 1     # no two debit attempts within 24h.
