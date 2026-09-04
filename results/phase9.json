@@ -1,0 +1,223 @@
+{
+  "seed": 42,
+  "n": 400,
+  "ablation": {
+    "table": {
+      "never_act": {
+        "net_value": 9549130.0,
+        "recovery_rate": 0.0,
+        "on_time_rate": 0.0,
+        "preserved_rate": 0.88,
+        "attempts": 0,
+        "delta_vs_fixed_per_case": -28.46,
+        "delta_ci95": [
+          -1137.26,
+          1146.86
+        ],
+        "pct_of_recovery_gap_closed": -75.7
+      },
+      "fixed_schedule": {
+        "net_value": 9560513.0,
+        "recovery_rate": 0.3275,
+        "on_time_rate": 0.3,
+        "preserved_rate": 0.88,
+        "attempts": 994,
+        "delta_vs_fixed_per_case": 0.0,
+        "delta_ci95": [
+          0.0,
+          0.0
+        ],
+        "pct_of_recovery_gap_closed": 0.0
+      },
+      "no_timing": {
+        "net_value": 10535763.0,
+        "recovery_rate": 0.69,
+        "on_time_rate": 0.3375,
+        "preserved_rate": 0.94,
+        "attempts": 685,
+        "delta_vs_fixed_per_case": 2438.13,
+        "delta_ci95": [
+          1263.41,
+          3761.43
+        ],
+        "pct_of_recovery_gap_closed": 83.8
+      },
+      "no_cause": {
+        "net_value": 10343643.0,
+        "recovery_rate": 0.6325,
+        "on_time_rate": 0.15,
+        "preserved_rate": 0.93,
+        "attempts": 731,
+        "delta_vs_fixed_per_case": 1957.83,
+        "delta_ci95": [
+          750.66,
+          3320.48
+        ],
+        "pct_of_recovery_gap_closed": 70.5
+      },
+      "liquidity_aware": {
+        "net_value": 10588594.0,
+        "recovery_rate": 0.735,
+        "on_time_rate": 0.26,
+        "preserved_rate": 0.9425,
+        "attempts": 553,
+        "delta_vs_fixed_per_case": 2570.2,
+        "delta_ci95": [
+          1257.02,
+          4097.04
+        ],
+        "pct_of_recovery_gap_closed": 94.2
+      },
+      "recoup": {
+        "net_value": 10632992.0,
+        "recovery_rate": 0.7175,
+        "on_time_rate": 0.3,
+        "preserved_rate": 0.9425,
+        "attempts": 544,
+        "delta_vs_fixed_per_case": 2681.2,
+        "delta_ci95": [
+          1427.3,
+          4161.52
+        ],
+        "pct_of_recovery_gap_closed": 90.2
+      },
+      "oracle": {
+        "net_value": 10537638.0,
+        "recovery_rate": 0.76,
+        "on_time_rate": 0.33,
+        "preserved_rate": 0.9325,
+        "attempts": 298,
+        "delta_vs_fixed_per_case": 2442.81,
+        "delta_ci95": [
+          1164.59,
+          3831.31
+        ],
+        "pct_of_recovery_gap_closed": 100.0
+      }
+    },
+    "recovery_gap_pts": 43.2,
+    "recoup_net_vs_oracle_net": 95354.0
+  },
+  "fairness": {
+    "by_income": {
+      "business": {
+        "n": 69,
+        "recovery_rate": 0.652,
+        "on_time_rate": 0.391,
+        "preserved_rate": 0.971,
+        "escalated_rate": 0.072,
+        "recovery_rate_vs_fixed": 0.435,
+        "net_delta_per_case_vs_fixed": 3862.06,
+        "net_delta_ci95": [
+          1335.45,
+          7473.47
+        ]
+      },
+      "gig": {
+        "n": 129,
+        "recovery_rate": 0.667,
+        "on_time_rate": 0.434,
+        "preserved_rate": 0.915,
+        "escalated_rate": 0.047,
+        "recovery_rate_vs_fixed": 0.217,
+        "net_delta_per_case_vs_fixed": 2380.83,
+        "net_delta_ci95": [
+          438.46,
+          4975.74
+        ]
+      },
+      "salaried": {
+        "n": 202,
+        "recovery_rate": 0.772,
+        "on_time_rate": 0.183,
+        "preserved_rate": 0.95,
+        "escalated_rate": 0.079,
+        "recovery_rate_vs_fixed": 0.485,
+        "net_delta_per_case_vs_fixed": 2469.65,
+        "net_delta_ci95": [
+          406.8,
+          4562.31
+        ]
+      }
+    },
+    "recovery_rate_disparity": 0.12,
+    "escalation_rate_disparity": 0.032,
+    "every_group_gains_vs_fixed": true,
+    "every_group_gain_significant": true
+  },
+  "sensitivity": {
+    "baseline_priors": {
+      "recoup_net": 12888625.0,
+      "fixed_net": 11892248.0,
+      "recoup_recovery": 0.6775,
+      "fixed_recovery": 0.2825,
+      "delta_net_per_case": 2490.94,
+      "ci95": [
+        810.82,
+        4412.64
+      ],
+      "recoup_wins": true
+    },
+    "fewer_cashflow_more_dead": {
+      "recoup_net": 12931737.0,
+      "fixed_net": 11824468.0,
+      "recoup_recovery": 0.7075,
+      "fixed_recovery": 0.29,
+      "delta_net_per_case": 2768.17,
+      "ci95": [
+        1435.31,
+        4415.33
+      ],
+      "recoup_wins": true
+    },
+    "churn_hazard_x1.8": {
+      "recoup_net": 12282950.0,
+      "fixed_net": 11431982.0,
+      "recoup_recovery": 0.6525,
+      "fixed_recovery": 0.2825,
+      "delta_net_per_case": 2127.42,
+      "ci95": [
+        644.61,
+        3838.62
+      ],
+      "recoup_wins": true
+    },
+    "low_ltv": {
+      "recoup_net": 4956191.0,
+      "fixed_net": 4448699.0,
+      "recoup_recovery": 0.6775,
+      "fixed_recovery": 0.2825,
+      "delta_net_per_case": 1268.73,
+      "ci95": [
+        604.83,
+        2023.46
+      ],
+      "recoup_wins": true
+    },
+    "long_outages": {
+      "recoup_net": 12920168.0,
+      "fixed_net": 11906082.0,
+      "recoup_recovery": 0.6775,
+      "fixed_recovery": 0.2825,
+      "delta_net_per_case": 2535.21,
+      "ci95": [
+        854.75,
+        4460.53
+      ],
+      "recoup_wins": true
+    },
+    "deeper_shortfalls": {
+      "recoup_net": 12820815.0,
+      "fixed_net": 11968407.0,
+      "recoup_recovery": 0.625,
+      "fixed_recovery": 0.2675,
+      "delta_net_per_case": 2131.02,
+      "ci95": [
+        457.84,
+        4066.96
+      ],
+      "recoup_wins": true
+    }
+  },
+  "sensitivity_ordering_holds": true
+}

@@ -36,7 +36,9 @@ Full write-up: **`docs/`** / the project report artifact.
 | **6** | Constraint filter (`harness/constraints.py` + `config/constraints.yaml`) — retry cap, min gaps, quiet hours, message cap; enforced structurally on every plan + property tests | ✅ done |
 | **7** | Cost-aware EV policy (`agent/ev_policy.py`, `recoup`) — per-case expected-value decision over retry / re-auth / do-nothing | ✅ done |
 | **8** | Audit trail (`agent/audit.py`, JSONL + SQLite) + optional cached LLM prose (`agent/llm_explain.py`) | ✅ done |
-| 9 | Oracle, ablations, sensitivity, fairness slice, video | ⬜ |
+| **9** | Evidence (`experiments/phase9.py`) — oracle ceiling, ablation ladder, prior-sensitivity sweep, fairness slice | ✅ done |
+| **10** | Service (`service/`) — Razorpay webhook ingestion → decision API → action executors → SQLite state → one React app (results overview + live console) | ✅ done |
+| **2.0** | Closed loop (`service/events.py`, `state.py`, `loop.py`, `agent/ros.py`, `recoup_v2`) — event-sourced customer state, webhook idempotency, Recovery Opportunity Score, adaptive re-planning, outcome/reward recording, model-health API | ✅ done |
 
 ### Where things stand (400 cases, seed 42)
 
@@ -89,6 +91,52 @@ majority prior; **ECE 0.047** calibrated (0.085 uncalibrated); holdout batch 0.8
 11.8 for a modal-day heuristic and 11.8 for fixed-day-7; p85 quantile coverage 0.83
 (0.84 on the holdout batch).
 
+### Evidence — does it hold up? (`results/phase9.json`)
+
+**Ablation ladder** — remove one capability at a time, measure the loss. `net Δ/case` is
+paired vs `fixed_schedule`; `% gap` is how much of the recovery gap to the oracle is closed.
+
+| policy | recovery | on-time | preserved | net Δ/case | % recovery gap |
+|--------|---------:|--------:|----------:|-----------:|---------------:|
+| `fixed_schedule` | 32.8% | 30.0% | 88.0% | — | 0% |
+| `no_cause` (EV policy, no classifier) | 63.2% | 15.0% | 93.0% | +₹1,958 | 70% |
+| `no_timing` (EV policy, fixed window guess) | 69.0% | 33.8% | 94.0% | +₹2,438 | 84% |
+| `liquidity_aware` (no cost/EV layer) | 73.5% | 26.0% | 94.2% | +₹2,570 | 94% |
+| **`recoup`** | 71.8% | 30.0% | 94.2% | **+₹2,681** | 90% |
+| _oracle_ (perfect timing, recovery-max) | _76.0%_ | _33.0%_ | _93.2%_ | _+₹2,443_ | _100%_ |
+
+The classifier is worth ~20 points of the gap (and drags `no_cause`'s on-time rate to
+15% — without it, dead mandates get retried on the funding schedule and never escalated).
+The timing model adds ~6 more. **`recoup` exceeds the oracle's net value by ~₹95k**: the
+oracle maximises raw recovery, `recoup` trades ~4 points of it to beat the billing date
+more often.
+
+**Prior sensitivity** — the trained models are frozen; only the *world* is perturbed, and
+each variant is a fresh 400-case draw. `recoup` beats `fixed_schedule` on net value under
+**every** perturbation, CI excluding zero:
+
+| world | net Δ/case (recoup − fixed) |
+|-------|---------------------------:|
+| baseline priors | +₹2,491 |
+| fewer cash-flow failures, more dead mandates | +₹2,768 |
+| churn hazard ×1.8 | +₹2,127 |
+| LTV halved (6 months, lower retention) | +₹1,269 |
+| bank outages 3× longer | +₹2,535 |
+| deeper balance shortfalls | +₹2,131 |
+
+**Fairness** — by customer income pattern. Every group gains significantly vs the baseline
+(all CIs exclude zero); no group is disproportionately escalated (disparity 0.03):
+
+| group | n | recovery | Δ vs fixed | on-time | escalated | net Δ/case |
+|-------|--:|---------:|-----------:|--------:|----------:|-----------:|
+| salaried | 202 | 77.2% | +48.5 pts | 18.3% | 7.9% | +₹2,470 |
+| gig | 129 | 66.7% | +21.7 pts | 43.4% | 4.7% | +₹2,381 |
+| business | 69 | 65.2% | +43.5 pts | 39.1% | 7.2% | +₹3,862 |
+
+Salaried customers recover 10 points more — a regular monthly payday makes the
+funding-window model most accurate for them. The gap is in *model accuracy by income
+regularity*, not the decision logic; it is the clearest target for future work.
+
 ### Audit trail
 
 `recoup` logs a structured record for every case (`audit/audit_42.jsonl` + `.db`):
@@ -103,6 +151,76 @@ realised outcome — plus a plain-English note:
 The note is a deterministic template — no network, always runs. An LLM can rewrite it
 (`--llm`, needs `ANTHROPIC_API_KEY`); calls are cached and never touched by `reproduce`.
 `python -m agent.audit --seed 42 --case c0011` prints one case in full.
+
+---
+
+## Recoup 2.0 — the closed loop
+
+Phases 1–9 build and prove the *decision*. Phase 10 wraps it in a service. **Recoup 2.0**
+turns that service into a closed-loop, event-driven recovery agent — without touching the
+Phase 1–9 engine or its evidence (every earlier number reproduces to the digit).
+
+```
+payment event ─▶ webhook gateway ─▶ customer state engine ─▶ diagnose ─▶ funding window
+     ▲                (HMAC + idempotency)     (event-sourced)              │
+     │                                                                     ▼
+  outcome ◀─ execute (dry-run / test mode) ◀─ select ◀─ guardrails ◀─ Recovery Opportunity Score
+     │                                                                     (candidate actions)
+     └──────────────── update state ─▶ re-plan (or stop when nothing clears the EV floor)
+```
+
+| Piece | File | What it adds |
+|-------|------|--------------|
+| Event log | `service/events.py` | 10 typed event kinds, timestamped, append-only, `dedup_key`-idempotent |
+| Customer state engine | `service/state.py` | `CustomerState` folded from the event log — failure/funding/recovery history, `churn_risk`, `recovery_stage`. **Observable-only**: no hidden truth, verified by test |
+| Webhook idempotency | `service/store.py` + `service/app.py` | `idempotency_keys` table; a duplicate `payment.failed` returns the original case, creates nothing |
+| Recovery Opportunity Score | `agent/ros.py` | `ROS(a) = P(recovery)·value·timeliness·retention − action_cost − churn_cost − missed_cycle`. A **decomposition of** the Phase-7 EV (every term comes off an `EVPolicy` instance), plus an explicit retention term that leans on `CustomerState.churn_risk`. The original `EV(a)` is untouched. |
+| Adaptive planner | `agent/policies.py::RecoupV2` (`recoup_v2`) | commits **one** action, then re-decides from the updated engagement history (`terminal="replan"`) |
+| Closed loop | `service/loop.py` | `open_recovery → schedule → execute → record_action_result → re-plan → …`; stop-loss when the best candidate ≤ the EV floor |
+| Outcome / reward | `service/store.py::outcomes` | per-action `reward = recovered_value − action_cost − missed_cycle − Δchurn·LTV`, with `state_before` / `state_after`. For offline evaluation only — **no online model updates** |
+| Monitoring | `service/monitoring.py` | `/api/models/health` (classifier ECE, liquidity MAE/coverage, policy stats — from `results/*.json`) and `/api/metrics` (the running service's own numbers) |
+
+**`recoup_v2` vs `recoup` (400 cases, seed 42):** `+₹2,599/case` net value vs fixed-schedule
+(CI `[+₹1,285, +₹4,114]`), 71.2 % recovery — statistically indistinguishable from one-shot
+`recoup` (`+₹2,681`). In the *frozen simulator* a failed retry carries no new signal, so
+re-planning cannot beat committing the ladder up front; its payoff is operational — in the
+live service it reacts to real late-arriving `payment.failed` and funding events. `recoup`
+stays the headline batch policy; `recoup_v2` is what the service runs.
+
+### API (Recoup 2.0 additions)
+
+```
+POST /webhook                      idempotent; payment.failed → open/continue, captured → recover, halted → revoke
+GET  /api/cases/{id}/timeline      the event log for one recovery
+GET  /api/cases/{id}/decision      the latest structured decision (+ ROS breakdown)
+POST /api/cases/{id}/replan        force a re-plan from current state
+GET  /api/metrics                  live service metrics (cases, recoveries, reward, cost/recovery)
+GET  /api/models/health            classifier / liquidity / policy health from the batch reports
+```
+
+### Example end-to-end flow
+
+```bash
+python tasks.py serve
+# 1. a failed debit arrives
+curl -X POST localhost:8000/webhook -H 'content-type: application/json' -d '{
+  "id": "evt_001", "event": "payment.failed",
+  "payload": {"payment": {"entity": {"amount": 299900, "error_code": "U30",
+    "error_description": "insufficient balance", "subscription_id": "sub_42"}}}}'
+#    → customer state built, cause diagnosed, ROS scores every action,
+#      one retry scheduled for the predicted funding day, terminal="replan"
+curl -X POST localhost:8000/webhook -d '{ "id": "evt_001", ... }'   # 2. duplicate → {"duplicate": true}, nothing created
+curl localhost:8000/api/cases/sub_42/timeline                        # 3. PAYMENT_FAILED → RETRY_SCHEDULED
+# 4. the retry fires (POST /tick), the gateway later reports payment.captured:
+curl -X POST localhost:8000/webhook -d '{ "event": "payment.captured",
+  "payload": {"payment": {"entity": {"subscription_id": "sub_42", "status": "captured"}}}}'
+#    → PAYMENT_RECOVERED, reward recorded, state = recovered, loop closed
+curl localhost:8000/api/metrics
+```
+
+The Live console shows all of this: the ROS table (every candidate, `P(clear)`, retention,
+score vs EV), the customer-state strip (stage, churn risk, prior attempts), the event
+timeline, and a Model-health panel.
 
 ---
 
@@ -121,10 +239,45 @@ python -m agent.train_liquidity           # -> agent/models/liquidity.pkl + resu
 python -m harness.run --seed 42
 python -m harness.run --trace c0142 --policy recoup
 python -m agent.audit --seed 42 --case c0011      # one decision, in full
+python -m experiments.phase9                       # oracle + ablations + sensitivity + fairness
 python -m pytest -q
 ```
 
-Outputs (git-ignored):
+### The app
+
+```bash
+python tasks.py train            # once — trains the two models the console needs
+python tasks.py serve            # -> http://127.0.0.1:8000
+```
+
+One React app (no build step — React + htm are vendored), two views:
+
+- **Results** — the thesis, the scoreboard, the ablation ladder, the sensitivity sweep and
+  the fairness slice, pulled live from `results/*.json` (or a baked snapshot when the
+  numbers haven't been generated yet). Deployable as static files too.
+- **Live console** — synthesise a failed mandate (with its hidden outcome, so it can be
+  scored) and watch Recoup decide: the cause posterior, the funding-window prediction, the
+  expected value of *every* candidate action, the plan, the plain-English reason — then
+  replay the 45-day window side by side against the fixed schedule, with a running
+  session scoreboard.
+
+It also accepts a real Razorpay webhook:
+
+```bash
+curl -X POST http://127.0.0.1:8000/webhook -H 'content-type: application/json' -d '{
+  "event": "payment.failed",
+  "payload": { "payment": { "entity": {
+    "amount": 299900, "error_code": "U30", "error_description": "insufficient balance", "id": "pay_demo" }}}}'
+```
+
+`POST /webhook` verifies the `X-Razorpay-Signature` HMAC when `RAZORPAY_WEBHOOK_SECRET` is
+set, maps the event to a case, runs the policy, persists the decision, and schedules the
+actions. Executors run in **dry-run** by default; set `RECOUP_EXECUTE_MODE=razorpay_test`
+with `rzp_test_*` keys to have the re-auth action create a real test-mode Payment Link.
+See `service/`.
+
+Outputs — `data/`, `agent/models/` and `audit/` are git-ignored and regenerated;
+`results/*.json` (seed 42) are committed as a record and overwritten by each run:
 
 | file | contents |
 |------|----------|
@@ -136,6 +289,7 @@ Outputs (git-ignored):
 | `results/liquidity_report.json` | funding-day MAE / median AE / bias, p85 quantile coverage, vs naive baselines |
 | `agent/models/*.pkl` | the trained classifier + liquidity models (regenerated by `train`) |
 | `audit/audit_42.jsonl` / `.db` | one decision record per case — belief, EV of each candidate, choice, rationale, outcome |
+| `results/phase9.json` | ablation ladder, oracle gap, prior-sensitivity sweep, fairness-by-income slice |
 
 ---
 
@@ -172,10 +326,12 @@ NPCI taxonomy.
 ## What this does **not** do
 
 - Voice / Hinglish calling — large failure surface, no effect on the metric.
-- A dashboard as the primary artifact — the brief never asks for one.
+- A dashboard as the *headline* — the console (Phase 10) is there to operate and inspect the
+  engine, not to stand in for the measured result.
 - Multi-agent orchestration frameworks — this is one decision chain.
 - Other failure classes — checkout abandonment, receivables, one-time payments.
-- Real production data — impossible to obtain, and not expected.
+- Real production data — impossible to obtain, and not expected. The webhook path is wired
+  to the Razorpay event shape and test-mode APIs; it is not pointed at a live account.
 
 ---
 
@@ -193,8 +349,10 @@ agent/
   liquidity.py            quantile funding-day model (p50 / p85 days-from-now)
   train_classifier.py     CLI: generate training batch (separate seed), fit + calibrate, tune threshold, report
   train_liquidity.py      CLI: train the funding-day quantile regressors, eval vs naive baselines
-  policies.py             cause_aware (Phase 4) + liquidity_aware (Phase 5) — staged, one idea each
+  policies.py             cause_aware (Phase 4) + liquidity_aware (Phase 5) + recoup_v2 (2.0, adaptive re-plan)
   ev_policy.py            recoup (Phase 7) — the cost-aware expected-value decision + explain()
+  ros.py                  Recoup 2.0 — Recovery Opportunity Score: a decomposition of the Phase-7 EV + a retention term
+  ablations.py            Phase 9 — recoup with the classifier / timing model stubbed out
   audit.py                Phase 8 — per-case decision record (JSONL + SQLite) + template narration
   llm_explain.py          optional cached LLM rewrite of the narration (offline-safe fallback)
 simulator/
@@ -207,8 +365,25 @@ harness/
   plan.py                the policy <-> harness contract: ScheduledAction, Plan
   constraints.py         the constraint filter: enforce(plan) -> legal plan + violations  (RBI/NPCI/TRAI + anti-harassment)
   engine.py              competing-risk rollout: per-case World, run_case; runs every plan through constraints.enforce
-  metrics.py             batch summary, paired bootstrap CIs, per-cause/-income splits, exceptions
+  metrics.py             batch summary, net-value, paired bootstrap CIs, per-cause/-income splits, exceptions
   run.py                 runner CLI + comparison table + --trace <case_id>
+  oracle.py              perfect-timing upper bound (reads truth) — the ceiling, not a competitor
+experiments/
+  phase9.py              ablation ladder + oracle + prior-sensitivity sweep + fairness slice
+service/                 Phase 10 + Recoup 2.0 — Recoup as a running closed-loop service (FastAPI, no new engine logic)
+  webhook.py             Razorpay payment.failed -> a case; HMAC signature check
+  events.py              2.0 — typed Event + EventType (append-only, dedup_key-idempotent)
+  state.py               2.0 — CustomerState folded from the event log (observable-only)
+  loop.py                2.0 — the closed loop: open_recovery / record_action_result / re-plan / stop-loss
+  monitoring.py          2.0 — /api/models/health + /api/metrics from results/*.json and the outcomes table
+  bridge.py              thin wrappers: decide() / random_case() / simulate() over the engine
+  executors.py           retry / re-auth link / escalate  (dry-run, or Razorpay test mode)
+  store.py               SQLite: cases, decisions, actions, escalations + events, customers, mandates, outcomes, idempotency_keys
+  app.py                 FastAPI routes + serves the app; GET /api/results feeds the Results view
+  webui/                 one React app, no build step (React + htm vendored)
+    index.html           shell + all CSS (Razorpay-styled, both themes)
+    app.js               <App> = <Overview> (results brief) + <Console> (decision UI + ROS table, customer-state strip, event timeline, model-health panel)
+    data.js              baked results snapshot — the Overview's fallback with no backend
 baselines/
   never_act.py           floor
   fixed_schedule.py      Baseline A — retry d+1/d+3/d+7 + SMS
@@ -222,4 +397,9 @@ tests/
   test_constraints.py    Phase-6 property tests (fuzzed plans come out legal, idempotent, greedy policy reined in)
   test_ev_policy.py      Phase-7 invariants (well-formed plans, restraint, dead->reauth, beats fixed_schedule on net value)
   test_audit.py          Phase-8 invariants (structured record, deterministic narration, SQLite roundtrip, LLM fallback)
+  test_phase9.py         Phase-9 invariants (oracle is the ceiling, ablations degrade, ordering survives perturbed priors, no group left behind)
+  test_service.py        Phase-10 + 2.0 (webhook signature/mapping, store round-trip, executors dry-run, idempotency, timeline/replan/metrics endpoints)
+  test_events_state.py   2.0 (event dedup, idempotency-key binding, state folding, recovery transitions, churn monotonicity, no leakage)
+  test_ros.py            2.0 (ROS wraps EV, candidates well-formed + ranked, dead mandate never tops a retry, churn lowers retention)
+  test_loop.py           2.0 (ingest + schedule, duplicate webhook ignored, recovered closes the loop, failed retry re-plans, revocation terminal, reward recorded)
 ```

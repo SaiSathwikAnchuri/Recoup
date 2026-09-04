@@ -4,8 +4,10 @@
     python tasks.py train         # train + calibrate the cause classifier and the liquidity model
     python tasks.py harness       # run policies over the batch, print comparison
     python tasks.py audit         # write audit/audit_42.jsonl (per-case decision + reason + outcome)
+    python tasks.py phase9        # oracle + ablations + prior sensitivity + fairness slice
+    python tasks.py serve         # the closed-loop service + app: results overview + live console (http://127.0.0.1:8000)
     python tasks.py test          # run the test suite
-    python tasks.py reproduce     # data + train + harness + audit + tests, the canonical end-to-end check
+    python tasks.py reproduce     # data + train + harness + audit + phase9 + tests
     python tasks.py show c0001    # dump one case
 """
 
@@ -32,6 +34,10 @@ def main() -> int:
         return run(*PY, "-m", "harness.run", "--seed", "42", *rest)
     if cmd == "audit":
         return run(*PY, "-m", "agent.audit", "--seed", "42", "--sqlite", *rest)
+    if cmd == "phase9":
+        return run(*PY, "-m", "experiments.phase9", *rest)
+    if cmd == "serve":
+        return run(*PY, "-m", "service.run", *rest)
     if cmd == "test":
         return run(*PY, "-m", "pytest", "-q")
     if cmd == "show":
@@ -42,6 +48,7 @@ def main() -> int:
         rc = rc or run(*PY, "-m", "agent.train_liquidity")
         rc = rc or run(*PY, "-m", "harness.run", "--seed", "42")
         rc = rc or run(*PY, "-m", "agent.audit", "--seed", "42", "--sqlite")
+        rc = rc or run(*PY, "-m", "experiments.phase9")
         return rc or run(*PY, "-m", "pytest", "-q")
     print(__doc__)
     return 2

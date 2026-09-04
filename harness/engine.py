@@ -101,6 +101,7 @@ class Outcome:
     policy: str
     true_cause: str
     income_pattern: str
+    true_ltv: float
     amount: float
     recovered: bool
     amount_recovered: float
@@ -277,7 +278,8 @@ def run_case(case: dict, truth_rec: dict, policy, cfg: HarnessConfig, run_seed: 
 
     return Outcome(
         case_id=case["case_id"], policy=policy.name, true_cause=truth_rec["true_cause"],
-        income_pattern=truth_rec["income_pattern"], amount=amount,
+        income_pattern=truth_rec["income_pattern"],
+        true_ltv=float(truth_rec.get("ltv_true", 0.0)), amount=amount,
         recovered=recovered, amount_recovered=amount if recovered else 0.0,
         recovered_on_time=on_time, via_reauth=via_reauth,
         days_to_recovery=round(days_to_recovery, 2) if days_to_recovery is not None else None,

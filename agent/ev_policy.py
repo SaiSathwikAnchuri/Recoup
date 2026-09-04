@@ -283,5 +283,5 @@ class EVPolicy:
             if len(days) >= budget:
                 break
         if not days:
-            days = [min(hz, max(min_day, int(round(p85))))]
+            days = [min(hz, max(min_day, int(round(w["days_p85"]))))]
         return sorted(days)

@@ -74,6 +74,60 @@ class LiquidityAwareRetry:
         return Plan(actions=actions, terminal="stop")
 
 
+class RecoupV2:
+    """Recoup 2.0 — the same economics as `recoup`, but adaptive.
+
+    Instead of committing the whole retry ladder up front, it scores every
+    candidate with the Recovery Opportunity Score (`agent/ros.py`), commits the
+    single best action, and asks the engine to come back (`terminal="replan"`)
+    once that action's result is known. When a retry fails, the next plan is
+    built from the updated engagement history — a later funding day, one fewer
+    attempt, whatever messages have gone out.
+
+    In the frozen simulator a failed retry carries no new signal, so this lands
+    close to one-shot `recoup`; its payoff is operational — in the live service
+    it reacts to real late-arriving `payment.failed` / funding events.
+    """
+
+    name = "recoup_v2"
+
+    def __init__(self, ro=None):
+        from .ros import RecoveryOpportunity
+        self._ro = ro or RecoveryOpportunity()
+
+    def plan(self, case: dict, state) -> Plan:
+        from harness.engine import EngagementState  # noqa: F401  (type only)
+        from harness.plan import ScheduledAction
+        from datetime import timedelta
+
+        p = self._ro.p
+        amount = float(case["mandate"]["amount"])
+        floor = max(p.params.min_ev_to_act, p.params.min_ev_frac_of_amount * amount)
+        cands = self._ro.score_candidates(case, state)
+        best = cands[0]
+        note = (f"round {state.round}: {best.action}"
+                + (f" @{best.scheduled_day}d" if best.scheduled_day else "")
+                + f"  ROS {best.score:+.0f} (EV {best.ev:+.0f})  floor {floor:.0f}")
+
+        if best.score <= floor or best.action in ("stop", "wait"):
+            probs = p.clf.predict_proba_one(case)
+            # escalate on the FIRST look only (parity with one-shot `recoup`); a
+            # dead-end reached mid-loop, after attempts were already spent, just
+            # stops rather than paying the ₹30 human-handoff again.
+            term = "escalate" if (probs["mandate_dead"] >= 0.5 and state.round == 0) else "stop"
+            return Plan([], terminal=term, note=note + f" -> {term}")
+
+        if best.action == "escalate":
+            return Plan([], terminal="escalate", note=note)
+
+        o = state.observed_at
+        act = ScheduledAction((o + timedelta(days=best.scheduled_day)).replace(hour=11),
+                              best.action)
+        if best.action == "reauth" and p.clf.predict_proba_one(case)["mandate_dead"] >= 0.5:
+            return Plan([act], terminal="escalate", note=note + " -> escalate")
+        return Plan([act], terminal="replan", note=note)
+
+
 def load_all() -> list:
     """Agent policies whose models are trained and ready. Empty list otherwise."""
     if not CauseClassifier.default_exists():
@@ -83,4 +137,5 @@ def load_all() -> list:
         from .ev_policy import EVPolicy
         out.append(LiquidityAwareRetry())
         out.append(EVPolicy())
+        out.append(RecoupV2())
     return out

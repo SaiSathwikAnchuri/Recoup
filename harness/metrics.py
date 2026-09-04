@@ -17,19 +17,28 @@ _MSG_COST_KIND = {
 
 
 def net_value(o: Outcome, costs) -> float:
-    """Rupees recovered, net of what the campaign cost: action spend, the
-    missed-cycle penalty on a late recovery, and the believed LTV of any mandate
-    that was revoked. This is the objective the Phase 7 policy optimises."""
+    """The value this case is worth after the recovery campaign:
+
+        + the recovered debit (delay-discounted), if it was recovered
+        - the missed-cycle penalty, if that recovery was late
+        + the mandate's lifetime value, if the mandate is still alive
+        - what the campaign spent (retries + messages)
+
+    A revoked mandate simply forfeits its LTV credit. LTV uses the *true* value
+    when the harness has it (a fair scoreboard), else the agent's estimate.
+    Compare policies by the PAIRED delta — the ~88% of mandates no policy can
+    save cancels out and what remains is the decision's contribution."""
+    ltv = getattr(o, "true_ltv", 0.0) or costs.ltv_estimate(o.amount)
     v = 0.0
     if o.recovered:
         v += costs.recovery_value(o.amount, days=o.days_to_recovery or 0.0)
         if not o.recovered_on_time:
             v -= costs.missed_cycle_penalty(o.amount)
+    if o.mandate_preserved:
+        v += ltv
     v -= o.attempts_used * costs.action_cost("retry")
     for kind, n in o.message_kinds.items():
         v -= n * costs.action_cost(_MSG_COST_KIND.get(kind, "sms"))
-    if o.revoked:
-        v -= costs.ltv_estimate(o.amount)
     return v
 
 
@@ -77,17 +86,23 @@ def by_key(outcomes: list[Outcome], key: str) -> dict:
     groups: dict[str, list[Outcome]] = {}
     for o in outcomes:
         groups.setdefault(getattr(o, key), []).append(o)
-    return {
-        k: {
+    def block(v):
+        b = {
             "n": len(v),
             "recovered_rs": round(sum(o.amount_recovered for o in v), 0),
             "recovery_rate": round(sum(o.recovered for o in v) / len(v), 3),
+            "on_time_rate": round(sum(o.recovered_on_time for o in v) / len(v), 3),
             "preserved_rate": round(sum(o.mandate_preserved for o in v) / len(v), 3),
+            "escalated_rate": round(sum(o.escalated for o in v) / len(v), 3),
             "attempts": sum(o.attempts_used for o in v),
             "messages": sum(o.messages_sent for o in v),
         }
-        for k, v in sorted(groups.items())
-    }
+        nv = [o.net_value for o in v if hasattr(o, "net_value")]
+        if nv:
+            b["net_value_per_case"] = round(float(np.mean(nv)), 1)
+        return b
+
+    return {k: block(v) for k, v in sorted(groups.items())}
 
 
 def paired_delta(treatment: list[Outcome], control: list[Outcome],

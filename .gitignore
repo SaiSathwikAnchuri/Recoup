@@ -13,3 +13,10 @@ agent/models/
 audit/*.jsonl
 audit/*.db
 audit/llm_cache.json
+
+# keep only the canonical seed-42 run under version control
+results/harness_*.json
+!results/harness_42.json
+
+# service runtime state
+service/*.db
