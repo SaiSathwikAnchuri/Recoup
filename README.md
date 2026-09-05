@@ -26,6 +26,40 @@ Full write-up: this README + the numbers reproduced live at `python tasks.py ser
 
 ---
 
+## The app
+
+`python tasks.py serve` opens a two-view React app (no build step — React + htm are
+vendored). Screenshots below are from a live run; every number is pulled from
+`results/*.json` or computed on the spot by the engine.
+
+### Results — the thesis and the evidence
+
+The headline number, then the policy scoreboard (each row adds one idea, priced in
+isolation), the ablation ladder (take a capability away, watch the value fall), and the
+robustness panel (six perturbed worlds + six independent seeds — every 95% interval clears
+zero).
+
+![Results overview — headline net value per case](docs/img/01-results-hero.png)
+
+![Policy scoreboard — never-act through Recoup, paired Δ vs the fixed schedule](docs/img/02-scoreboard.png)
+
+![Ablation ladder — classifier-only, timing-only, timing-no-cost, Recoup, vs the oracle ceiling](docs/img/03-ablation.png)
+
+![Robustness — Recoup's net gain under 6 perturbed prior sets and 6 world seeds, with 95% CIs](docs/img/04-robustness.png)
+
+### Live console — one failed mandate, end to end
+
+Synthesise a failed debit (with its hidden outcome, so it can be scored), watch Recoup
+decide, then replay the 45-day window against the industry fixed schedule.
+
+![Per-case decision — cause posterior, funding window, and the Recovery Opportunity Score for every candidate action](docs/img/05-decision.png)
+
+![45-day outcome — Recoup recovers ₹9,135 on a predicted-window retry; the fixed schedule (day 1/3/7 + SMS) never reaches the funding day](docs/img/06-outcome.png)
+
+![Model health — classifier accuracy / calibration, funding-day error, policy recovery, from the offline batch](docs/img/07-model-health.png)
+
+---
+
 ## Status
 
 | Phase | Component | State |
@@ -306,14 +340,15 @@ python -m experiments.phase9                       # oracle + ablations + sensit
 python -m pytest -q
 ```
 
-### The app
+### Running the app
 
 ```bash
 python tasks.py train            # once — trains the two models the console needs
 python tasks.py serve            # -> http://127.0.0.1:8000
 ```
 
-One React app (no build step — React + htm are vendored), two views:
+One React app (no build step — React + htm are vendored), two views — see
+[The app](#the-app) above for screenshots:
 
 - **Results** — the thesis, the scoreboard, the ablation ladder, the sensitivity sweep and
   the fairness slice, pulled live from `results/*.json` (or a baked snapshot when the

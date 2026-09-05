@@ -322,7 +322,7 @@ function ModelHealth() {
       ${status && html`<span style=${{ color: dot(status) }}>● </span>`}${val}</div></div>`;
   return html`<div class="card">
     <h2>Model health</h2>
-    <p class="muted" style=${{ fontSize: ".78rem", margin: ".2rem 0 .8rem" }}>offline batch, seed 42 · ${h.generated_from}</p>
+    <p class="muted" style=${{ fontSize: ".78rem", margin: ".2rem 0 .8rem" }}>${h.generated_from}</p>
     <div style=${{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: ".8rem" }}>
       ${cell("classifier accuracy", (h.classifier.accuracy * 100).toFixed(1) + "%")}
       ${cell("calibration ECE", h.classifier.ece_calibrated, h.classifier.status)}
