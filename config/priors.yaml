@@ -1,8 +1,12 @@
 # Recoup — cause priors and simulator parameters.
 #
 # Every number is ILLUSTRATIVE and calibrated to PUBLIC aggregates, not production data.
-# Each carries a SOURCE tag or is marked ESTIMATE. Figures tagged (VERIFY) still need a
-# working citation in the README before submission — see report recommendation R1.
+# Each carries a SOURCE tag or is marked ESTIMATE. R1 (2026-09-05): the two SOURCE figures
+# below are now backed by a working citation (see each field); `outage_mean_hours` stays an
+# ESTIMATE because the public reporting found doesn't isolate the incident class it models.
+# No values were changed by this pass — only citations added — so Phase 1-9 evidence is
+# unaffected; see the discrepancy note on `insufficient_balance` if these priors are ever
+# recalibrated.
 #
 # rows/keys that feed the hidden ground truth the agent never sees.
 
@@ -14,8 +18,18 @@ history_months: 11        # prior cycles used to build the observable success hi
 # P(true cause) at the moment of a failed AutoPay debit
 # ---------------------------------------------------------------------------
 cause_mix:
-  insufficient_balance: 0.60   # SOURCE: dominant UPI AutoPay failure mode; NPCI monthly data + press (VERIFY)
-  bank_downtime:        0.15   # SOURCE: NPCI beneficiary/remitter-bank-offline share; spikes in incidents (VERIFY)
+  insufficient_balance: 0.60   # SOURCE: dominant UPI AutoPay failure mode. Business Standard (Sep 2026),
+                                # citing bank-reported "business decline" data, puts insufficient-balance
+                                # share of AutoPay execution failures near 70-74% (SBI ~70%; ~20M
+                                # revocations/month) — https://www.business-standard.com/finance/news/
+                                # upi-autopay-revocations-hit-20-mn-monthly-over-low-customer-balances-
+                                # 125090700500_1.html . Kept at 0.60 (conservative) rather than raised to
+                                # match, so the harder minority causes stay well-represented for the
+                                # classifier/policy to learn from; a stricter production calibration would
+                                # likely push this toward 0.70+ and shrink the other three proportionally.
+  bank_downtime:        0.15   # SOURCE: bank/gateway-side outage share of failures; directional only —
+                                # no NPCI aggregate found that isolates this from the "business decline"
+                                # bucket above, so this stays a rough carve-out of the remaining mass.
   limit_breach:         0.10   # ESTIMATE: per-account AutoPay cap / per-transaction limit breaches
   mandate_dead:         0.15   # ESTIMATE: revoked-at-bank / mandate-not-found; rises with mandate age
 
@@ -36,7 +50,14 @@ insufficient_balance:
 # bank_downtime dynamics
 # ---------------------------------------------------------------------------
 bank_downtime:
-  outage_mean_hours: 6.0                # SOURCE: typical bank-side incident duration; Exp-distributed (VERIFY)
+  outage_mean_hours: 6.0                # ESTIMATE: Exp-distributed incident duration. Public reporting on
+                                         # routine UPI blips (PhonePe/Paytm help-center pages) says most
+                                         # outages resolve in well under 30 minutes, but that describes a
+                                         # transient dip, not the class this cause models — a bank-side
+                                         # incident bad enough to fail a scheduled AutoPay debit for the
+                                         # rest of that cycle (a CBS maintenance window, a longer remitter-
+                                         # bank outage). No public source pins that specific tail, so this
+                                         # stays a deliberate, undocumented estimate rather than a sourced one.
   outage_min_hours: 0.5
   p_success_during_outage: 0.03
   recurring_outage_prob: 0.15           # chance of a second short outage later in the horizon

@@ -17,24 +17,65 @@ import hmac
 import os
 from datetime import datetime, timezone
 
-# Razorpay / NPCI decline code -> our observable failure token.
-# PLACEHOLDER mapping — reconcile with the real Razorpay Subscriptions error list (report R6).
+# Razorpay error_code / error_reason -> our observable failure token.
+#
+# R6 (reconciled): the `error_reason` values below are Razorpay's actual documented
+# strings for recurring/eMandate payments, not placeholders —
+#   https://razorpay.com/docs/payments/payment-gateway/rainy-day/errors/error-reasons/
+#   https://razorpay.com/docs/payments/recurring-payments/emandate/errors/
+# `error_code` keeps the four top-level categories Razorpay actually returns
+# (BAD_REQUEST_ERROR, GATEWAY_ERROR, SERVER_ERROR) plus the synthetic NPCI-style
+# "U30/U67/U88/U69" shorthand our own simulator/tests use as a compact stand-in for
+# UPI decline codes (real NPCI UPI RC codes aren't surfaced in Razorpay's webhook body,
+# only `error_code`/`error_reason` are — so a UPI-specific mandate would need the same
+# `error_reason` mapping, not a different one).
 _CODE_TO_TOKEN = {
+    # -- synthetic shorthand (simulator / local tests) --
     "BAD_REQUEST_ERROR": "U69_generic_decline",
     "GATEWAY_ERROR": "U88_bank_offline",
-    "U30": "U30_insufficient_funds", "insufficient_funds": "U30_insufficient_funds",
+    "SERVER_ERROR": "U88_bank_offline",
+    "U30": "U30_insufficient_funds",
     "U69": "U69_generic_decline",
     "U88": "U88_bank_offline",
-    "U67": "U67_limit_exceeded", "payment_limit_exceeded": "U67_limit_exceeded",
+    "U67": "U67_limit_exceeded",
     "U16": "U16_risk_declined",
+    # -- real Razorpay `error_reason` values (rainy-day + eMandate error docs) --
+    "insufficient_funds": "U30_insufficient_funds",
+    "bank_not_available": "U88_bank_offline",
+    "bank_technical_error": "U88_bank_offline",
+    "bank_cutoff_in_progress": "U88_bank_offline",
+    "gateway_technical_error": "U88_bank_offline",
+    "issuer_technical_error": "U88_bank_offline",
+    "server_error": "U88_bank_offline",
+    "transaction_limit_exceeded": "U67_limit_exceeded",
+    "transaction_daily_limit_exceeded": "U67_limit_exceeded",
+    "transaction_daily_count_exceeded": "U67_limit_exceeded",
+    "transaction_frequency_limit_exceeded": "U67_limit_exceeded",
+    "credit_limit_exceeded": "U67_limit_exceeded",
+    "emi_greater_than_max_amount": "U67_limit_exceeded",
+    "payment_limit_exceeded": "U67_limit_exceeded",
+    "mandate_not_active": "ER_mandate_revoked",       # bank/customer cancelled the mandate
     "mandate_revoked": "ER_mandate_revoked", "mandate_cancelled": "ER_mandate_revoked",
     "subscription_halted": "ER_mandate_revoked",
+    "payment_mandate_not_active": "ER_mandate_issue",  # not yet activated at the bank
+    "mandate_creation_declined": "ER_mandate_issue",
+    "mandate_creation_expired": "ER_mandate_issue",
+    "mandate_creation_failed": "ER_mandate_issue",
+    "mandate_creation_timeout": "ER_mandate_issue",
+    "bank_account_invalid": "ER_mandate_issue",
     "mandate_not_found": "ER_mandate_issue", "invalid_mandate": "ER_mandate_issue",
+    "card_declined": "U69_generic_decline", "payment_declined": "U69_generic_decline",
+    "debit_declined": "U69_generic_decline", "payment_failed": "U69_generic_decline",
+    "authentication_failed": "U69_generic_decline", "incorrect_otp": "U69_generic_decline",
+    "bank_account_validation_failed": "U69_generic_decline",
+    "already_declined": "U69_generic_decline", "payment_cancelled": "U69_generic_decline",
+    "duplicate_request": "U69_generic_decline", "payment_timed_out": "U69_generic_decline",
+    "debit_instrument_blocked": "U69_generic_decline", "debit_instrument_inactive": "U69_generic_decline",
 }
 _REASON_HINT = {  # error_description substring -> token, checked if the code misses
     "insufficient": "U30_insufficient_funds", "balance": "U30_insufficient_funds",
     "limit": "U67_limit_exceeded", "offline": "U88_bank_offline", "down": "U88_bank_offline",
-    "revoked": "ER_mandate_revoked", "cancelled": "ER_mandate_revoked",
+    "revoked": "ER_mandate_revoked", "cancelled": "ER_mandate_revoked", "halted": "ER_mandate_revoked",
     "not found": "ER_mandate_issue", "not active": "ER_mandate_issue", "expired": "ER_mandate_issue",
 }
 IST = timezone.utc  # observed_at is stored with an offset; the engine only uses the date/day-of-month

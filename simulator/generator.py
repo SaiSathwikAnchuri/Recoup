@@ -40,8 +40,12 @@ CATEGORY_P = [0.30, 0.20, 0.20, 0.15, 0.15]
 
 REF_YEAR, REF_MONTH = 2026, 3   # the failed debit happens in March 2026
 
-# Placeholder code tokens -> (npci_code, human description).
-# RECONCILE with the real Razorpay Subscriptions / NPCI decline taxonomy (report R6).
+# Code tokens -> (compact shorthand code, human description).
+# R6 (reconciled): `npci_code` here is our own compact stand-in (Razorpay's webhook body
+# carries `error_code`/`error_reason` strings, not raw NPCI UPI RC codes) — the real
+# `error_reason` values these four causes correspond to are enumerated in
+# service/webhook.py's `_CODE_TO_TOKEN`, sourced from Razorpay's rainy-day and eMandate
+# error docs.
 CODE_META = {
     "U30_insufficient_funds": ("U30", "insufficient funds"),
     "U69_generic_decline":    ("U69", "transaction declined by the bank"),

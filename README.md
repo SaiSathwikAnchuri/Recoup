@@ -299,8 +299,7 @@ Real UPI mandate / bank data is confidential and PII-bearing under DPDP; NPCI pu
 only aggregates. So every case is generated. Each carries a **hidden true cause** and a
 **hidden response function** (how P(debit clears) moves over the horizon, per cause) that
 the agent never sees — only the harness does. Priors live in `config/priors.yaml`, each
-with a source tag; figures tagged `(VERIFY)` still need a working citation before
-submission.
+with a source tag or an explicit `ESTIMATE` marker.
 
 The claim this project tests does not depend on the absolute numbers being right — all
 policies (Recoup and both baselines) face an identical simulated world, so the **gap**
@@ -311,15 +310,18 @@ under different priors to show the ordering holds.
 
 | Cause | Prior | Basis |
 |-------|------:|-------|
-| `insufficient_balance` | 0.60 | Dominant UPI AutoPay failure mode; NPCI monthly data + press *(VERIFY)* |
-| `bank_downtime` | 0.15 | NPCI beneficiary/remitter-bank-offline share; incident spikes *(VERIFY)* |
+| `insufficient_balance` | 0.60 | Dominant UPI AutoPay failure mode. Public reporting puts the real share nearer 70-74% ([Business Standard, Sep 2026](https://www.business-standard.com/finance/news/upi-autopay-revocations-hit-20-mn-monthly-over-low-customer-balances-125090700500_1.html)) — kept conservative here so the three harder minority causes stay well-represented for the classifier to learn from |
+| `bank_downtime` | 0.15 | Bank/gateway-side outage share; directional carve-out, no isolating NPCI aggregate found |
 | `limit_breach` | 0.10 | Estimate — per-account AutoPay cap / per-transaction limit |
 | `mandate_dead` | 0.15 | Estimate — revoked-at-bank / not-found; rises with mandate age |
 
-Failure **codes are deliberately ambiguous** (`config/priors.yaml → failure_code_emission`):
-one generic decline code is reachable from several causes, so the classifier cannot cheat.
-Code strings are placeholders pending reconciliation with the real Razorpay Subscriptions /
-NPCI taxonomy.
+Failure **codes are reconciled with Razorpay's actual `error_reason` taxonomy**
+(`service/webhook.py → _CODE_TO_TOKEN`, sourced from Razorpay's
+[rainy-day](https://razorpay.com/docs/payments/payment-gateway/rainy-day/errors/error-reasons/)
+and [eMandate](https://razorpay.com/docs/payments/recurring-payments/emandate/errors/) error
+docs); the four engineered causes are still **deliberately ambiguous** at the code level
+(`config/priors.yaml → failure_code_emission`) — one generic decline code is reachable from
+several causes, so the classifier cannot cheat off the code string alone.
 
 ---
 
