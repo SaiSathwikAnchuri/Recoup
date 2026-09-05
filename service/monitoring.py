@@ -101,4 +101,15 @@ def live_metrics(store) -> dict:
         "escalation_rate": round(by_status.get("escalated", 0) / len(cases), 3) if cases else None,
         "demo_simulations": len(sims),
         "demo_net_value_total": round(sum(o["reward"] or 0.0 for o in sims), 2) if sims else None,
+        "demo_net_delta_total": round(sum(_net_delta(o) for o in sims), 2) if sims else None,
     }
+
+
+def _net_delta(outcome: dict) -> float:
+    """net_value(recoup) - net_value(fixed_schedule) for one demo simulation, stashed in
+    state_before at record time (see loop.log_simulation). Older rows predate the field and
+    contribute 0 rather than skewing the total."""
+    try:
+        return float(json.loads(outcome.get("state_before") or "{}").get("net_delta", 0.0))
+    except (TypeError, ValueError):
+        return 0.0

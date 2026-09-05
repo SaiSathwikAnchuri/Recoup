@@ -208,7 +208,7 @@ function Overview({ d, live }) {
 
     <section class="wrap" style=${{ paddingTop: "2.4rem", paddingBottom: "3.5rem" }}>
       <p class="kicker" style=${{ marginBottom: ".7rem" }}>Reproduce every figure</p>
-      <div class="codeblock">pip install -r requirements.txt <span class="p">&amp;&amp;</span> python tasks.py reproduce</div>
+      <div class="codeblock">pip install -r requirements.txt <span class="p">&&</span> python tasks.py reproduce</div>
       <p class="muted" style=${{ marginTop: "1rem", fontSize: ".87rem" }}>Simulator → harness → cost model →
         classifier → funding-window model → constraint filter → EV policy → audit trail → evidence → service.
         Each stage has its own tests; the policy is stage seven, after everything it needs to be honest about.</p>
@@ -357,7 +357,10 @@ function Console({ live, mode, session, setSession }) {
 
   const refreshLog = () => {
     api("/cases?limit=40").then(r => setLog(r.cases || []));
+    // Both all-time (DB-backed) so a page reload shows the same numbers it did before —
+    // "net vs fixed schedule" used to be a client-only counter that reset to ₹0 on refresh.
     api("/stats").then(s => setSession(x => ({ ...x, seen: s.n, recovered: s.recovered_rs, escalated: s.escalated })));
+    api("/api/metrics").then(m => setSession(x => ({ ...x, delta: m.demo_net_delta_total || 0 })));
   };
   useEffect(refreshLog, []);
 
@@ -367,7 +370,6 @@ function Console({ live, mode, session, setSession }) {
       const r = await api("/demo/random" + (cause ? "?cause=" + cause : ""), { method: "POST" });
       if (r.detail) { alert(r.detail); return; }
       setCur(r);
-      if (r.simulation) setSession(x => ({ ...x, delta: x.delta + r.simulation.net_delta }));
       refreshLog();
     } finally { setBusy(false); }
   };

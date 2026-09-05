@@ -38,19 +38,24 @@ def healthz():
             "execute_mode": os.environ.get("RECOUP_EXECUTE_MODE", "dry_run")}
 
 
+# no Cache-Control on these means a plain reload can serve a stale copy from disk cache with
+# no revalidation at all (observed while editing app.js live) — force revalidation instead.
+_NO_CACHE = {"Cache-Control": "no-cache"}
+
+
 @app.get("/")
 def index():
-    return FileResponse(_WEBUI / "index.html")
+    return FileResponse(_WEBUI / "index.html", headers=_NO_CACHE)
 
 
 @app.get("/app.js")
 def _appjs():
-    return FileResponse(_WEBUI / "app.js", media_type="application/javascript")
+    return FileResponse(_WEBUI / "app.js", media_type="application/javascript", headers=_NO_CACHE)
 
 
 @app.get("/data.js")
 def _datajs():
-    return FileResponse(_WEBUI / "data.js", media_type="application/javascript")
+    return FileResponse(_WEBUI / "data.js", media_type="application/javascript", headers=_NO_CACHE)
 
 
 @app.get("/api/results")

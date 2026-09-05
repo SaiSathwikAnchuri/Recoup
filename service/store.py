@@ -301,7 +301,7 @@ class Store:
 
     def all_outcomes(self, limit: int = 5000) -> list[dict]:
         rows = self._c.execute(
-            "SELECT case_id, action, result, recovered_amount, recovery_delay, reward "
+            "SELECT case_id, action, result, recovered_amount, recovery_delay, reward, state_before "
             "FROM outcomes ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
 

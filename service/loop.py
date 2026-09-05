@@ -256,6 +256,10 @@ def log_simulation(store, case: dict, sim: dict) -> None:
                          recovered_amount=r.get("amount_recovered", 0.0),
                          recovery_delay=r.get("days_to_recovery"),
                          reward=float(r.get("net_value", 0.0)),
+                         # net_delta (vs the fixed-schedule baseline on the same simulated case) rides
+                         # in state_before rather than a new column, so the console's running "net vs
+                         # fixed schedule" stat survives a page reload — see monitoring.live_metrics.
+                         state_before={"net_delta": sim.get("net_delta", 0.0)},
                          state_after=cstate.to_dict())
 
 
