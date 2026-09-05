@@ -131,6 +131,21 @@ def test_demo_random_decides_and_simulates(client):
 
 
 @pytest.mark.skipif(not _MODELS, reason="models not trained")
+def test_demo_random_same_seed_gives_the_same_decision_every_time(client):
+    """A deterministic demo must mean the SAME outcome on every replay of the same
+    seed, not just the same outcome on the first call (final-audit fix: repeated
+    calls used to keep appending to the same demo case_id's event log)."""
+    r1 = client.post("/demo/random?cause=mandate_dead&seed=2").json()
+    r2 = client.post("/demo/random?cause=mandate_dead&seed=2").json()
+    r3 = client.post("/demo/random?cause=mandate_dead&seed=2").json()
+    assert r1["case_id"] == r2["case_id"] == r3["case_id"]
+    assert r1["decision"]["decision"] == r2["decision"]["decision"] == r3["decision"]["decision"]
+    assert r1["simulation"]["net_delta"] == r2["simulation"]["net_delta"] == r3["simulation"]["net_delta"]
+    tl = client.get(f"/api/cases/{r1['case_id']}/timeline").json()
+    assert sum(e["type"] == "PAYMENT_FAILED" for e in tl["events"]) == 1   # not 3
+
+
+@pytest.mark.skipif(not _MODELS, reason="models not trained")
 def test_webhook_ingests_and_schedules(client):
     ev = {"event": "payment.failed", "payload": {"payment": {"entity": {
         "amount": 299900, "error_code": "U30", "error_description": "insufficient balance",
@@ -142,6 +157,21 @@ def test_webhook_ingests_and_schedules(client):
     assert all(a["kind"] in ("retry", "reauth", "sms", "nudge") for a in r["scheduled"])
     # tick executes nothing yet (all actions are days in the future)
     assert client.post("/tick").json()["executed"] == []
+
+
+@pytest.mark.skipif(not _MODELS, reason="models not trained")
+def test_demo_outcome_feeds_the_closed_loop(client):
+    ev = {"event": "payment.failed", "payload": {"payment": {"entity": {
+        "amount": 199900, "error_code": "U30", "error_description": "insufficient balance",
+        "id": "pay_outcome_test"}}}}
+    client.post("/webhook", json=ev)
+    r = client.post("/demo/outcome/pay_outcome_test?kind=retry&result=fail").json()
+    assert r["recovered"] is False
+    assert r["case_id"] == "pay_outcome_test"
+    r2 = client.post("/demo/outcome/pay_outcome_test?kind=retry&result=success").json()
+    assert r2["recovered"] is True
+    assert client.post("/demo/outcome/no_such_case?kind=retry&result=fail").status_code == 404
+    assert client.post("/demo/outcome/pay_outcome_test?kind=bogus&result=fail").status_code == 400
 
 
 @pytest.mark.skipif(not _MODELS, reason="models not trained")
@@ -191,3 +221,58 @@ def test_metrics_and_model_health(client):
     h = client.get("/api/models/health").json()
     assert h["classifier"]["accuracy"] and h["liquidity"]["mae_days"]
     assert h["classifier"]["status"] in ("good", "warn", "alert", "unknown")
+
+
+# -- final-audit hardening ----------------------------------------------
+@pytest.mark.skipif(not _MODELS, reason="models not trained")
+def test_decide_rejects_malformed_body_as_400_not_500(client):
+    r = client.post("/decide", data=b"{not json")
+    assert r.status_code == 400
+    r2 = client.post("/decide", json=["not", "an", "object"])
+    assert r2.status_code == 400
+    r3 = client.post("/decide", json={"case_id": "c1"})   # missing mandate/failure/history
+    assert r3.status_code == 400
+    assert "internal_error" not in r3.text               # a KeyError must not fall through as a 500
+
+
+def test_unhandled_exception_does_not_leak_raw_exception_text(client, monkeypatch):
+    import service.app as app_mod
+    monkeypatch.setattr(app_mod, "monitoring", type("M", (), {
+        "live_metrics": staticmethod(lambda store: (_ for _ in ()).throw(RuntimeError("s3cr3t/internal/path")))
+    }))
+    # the shared `client` fixture re-raises server exceptions (useful for every
+    # other test); this is the one test that needs to see what a real deployed
+    # server (uvicorn, not TestClient's debug passthrough) sends the caller.
+    local = TestClient(app_mod.app, raise_server_exceptions=False)
+    r = local.get("/api/metrics")
+    assert r.status_code == 500
+    assert "s3cr3t" not in r.text
+    body = r.json()
+    assert body["error"] == "internal_error"
+
+
+@pytest.mark.skipif(not _MODELS, reason="models not trained")
+def test_api_key_gate_is_off_by_default_and_opt_in(client, monkeypatch):
+    monkeypatch.delenv("RECOUP_API_KEY", raising=False)
+    assert client.get("/cases").status_code == 200          # default posture: open, hackathon-friendly
+
+    monkeypatch.setenv("RECOUP_API_KEY", "test-key-123")
+    try:
+        assert client.get("/cases").status_code == 401                                    # no header
+        assert client.get("/cases", headers={"Authorization": "Bearer wrong"}).status_code == 401
+        assert client.get("/cases", headers={"Authorization": "Bearer test-key-123"}).status_code == 200
+        assert client.get("/healthz").status_code == 200    # always open, even with a key set
+    finally:
+        monkeypatch.delenv("RECOUP_API_KEY", raising=False)
+
+
+def test_claim_action_is_race_safe(tmp_path):
+    from service.store import Store
+    s = Store(tmp_path / "claim.db")
+    s.upsert_case({"case_id": "c1", "mandate": {"amount": 100.0}, "failure": {"token": "U30_x"}},
+                 source="test")
+    s.schedule_actions("c1", [{"kind": "retry", "due_at": 0.0}])
+    aid = s.due_actions()[0]["id"]
+    assert s.claim_action(aid) is True         # first caller wins the race
+    assert s.claim_action(aid) is False        # a concurrent second caller does not
+    s.close()

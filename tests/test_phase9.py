@@ -84,6 +84,18 @@ def test_ordering_holds_under_perturbed_priors(bits):
     assert signif >= len(rows) - 1
 
 
+# -- seed robustness (final audit) --------------------------------
+def test_recoup_is_not_a_seed_42_artifact(bits):
+    """The headline number must not be a lucky roll of world seed 42 — check a
+    couple of independent seeds at a smaller n (kept small so this test stays fast;
+    the real evidence run in results/phase9.json uses n=400 across 5 seeds)."""
+    from experiments.phase9 import seed_robustness
+    cases, truth, cfg, costs = bits
+    r = seed_robustness(PRIORS, n=150, seeds=[7, 2024], cfg=cfg, costs=costs)
+    assert set(r["by_seed"]) == {"seed_7", "seed_2024"}
+    assert r["recoup_wins_every_seed"], r
+
+
 # -- fairness ----------------------------------------------------
 def test_no_income_group_is_left_behind(bits):
     from experiments.phase9 import fairness

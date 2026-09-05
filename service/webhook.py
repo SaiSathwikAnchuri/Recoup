@@ -109,6 +109,42 @@ def _dig(d: dict, *path, default=None):
     return d
 
 
+def _clean_id(raw, maxlen: int = 128) -> str | None:
+    """Defensively normalize an externally-supplied identifier (Razorpay payment /
+    subscription id, or anything from webhook JSON) before it becomes a SQLite key,
+    a log line, or — via the audit narration — text handed to an LLM prompt: strip
+    control characters and cap length. Razorpay ids are short alphanumerics, but the
+    webhook body is attacker-shaped input whenever RAZORPAY_WEBHOOK_SECRET is unset
+    (local/demo mode), so this never trusts the shape without checking it."""
+    if raw is None:
+        return None
+    s = "".join(ch for ch in str(raw) if ch.isprintable())
+    return s[:maxlen] or None
+
+
+def recovery_ref(event: dict) -> tuple[str | None, str]:
+    """For a payment-cleared-style webhook, find which open recovery it belongs to
+    and which action kind actually cleared it.
+
+    Prefers the correlation Recoup itself attached when it created a re-auth
+    Payment Link (`notes.recoup_case` / `notes.recoup_action`, set in
+    `service/executors.py::_reauth`) — a Payment Link's own payment is NOT
+    automatically tied to the original subscription/payment id by Razorpay, so
+    without this the reauth-driven recovery is invisible to `ingest_webhook_event`.
+    Falls back to the subscription/payment id (an ordinary retry or subscription
+    auto-charge) when no such notes are present.
+    """
+    payment = _dig(event, "payload", "payment", "entity", default={}) or {}
+    sub = _dig(event, "payload", "subscription", "entity", default={}) or {}
+    notes = payment.get("notes") or {}
+    tagged_case = _clean_id(notes.get("recoup_case"))
+    if tagged_case:
+        kind = notes.get("recoup_action") if notes.get("recoup_action") in ("retry", "reauth") else "reauth"
+        return tagged_case, kind
+    ref = sub.get("id") or payment.get("subscription_id") or payment.get("id")
+    return _clean_id(ref), "retry"
+
+
 def parse_event(event: dict, *, history: dict | None = None,
                 now: datetime | None = None) -> dict:
     """Map a Razorpay webhook `event` dict to a Recoup observable case."""
@@ -123,7 +159,7 @@ def parse_event(event: dict, *, history: dict | None = None,
     token = _token_from(code, desc)
 
     sub_id = sub.get("id") or payment.get("subscription_id") or _dig(payment, "notes", "subscription_id")
-    case_id = sub_id or payment.get("id") or f"rzp_{int(now.timestamp())}"
+    case_id = _clean_id(sub_id or payment.get("id")) or f"rzp_{int(now.timestamp())}"
 
     created = sub.get("created_at")
     age_months = 1

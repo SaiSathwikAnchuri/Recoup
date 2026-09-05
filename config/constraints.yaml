@@ -9,17 +9,22 @@
 # slot, or DROPPED if no legal slot fits before the horizon. Every drop / move is
 # logged (Outcome.blocked_actions, and the timeline).
 #
-# Figures tagged (VERIFY) need a current NPCI / RBI / TRAI circular before
-# submission (report R6). Limits are applied over the whole engagement window
+# The retry cap/cadence and quiet-hours figures are cited against current NPCI/TRAI
+# rules (see each field). Limits are applied over the whole engagement window
 # (~45 days), which is at least as strict as the real per-cycle caps.
 
 retry:
-  max_per_engagement: 3     # NPCI cap on auto-debit retry attempts per mandate per cycle. (VERIFY)
-  min_gap_hours: 24         # no two debit attempts within 24h. (VERIFY)
+  max_per_engagement: 3     # SOURCE (final audit, verified): NPCI's Aug-2025 AutoPay retry rule —
+                            # 1 original execution + up to 3 retries per mandate per cycle. Matches
+                            # the FixedSchedule baseline's day+1/+3/+7 cadence, also NPCI-aligned.
+                            # https://www.tribuneindia.com/news/business/upi-new-rules-from-august-1-here-are-the-key-changes
+  min_gap_hours: 24         # SOURCE: retries space out ~24h then ~72h then ~day 7 per the same rule.
 
 messaging:
   max_per_engagement: 4     # anti-harassment cap on customer-facing messages (nudge / sms / reauth). (ESTIMATE)
   min_gap_hours: 20         # space dunning contact by ~a day. (ESTIMATE)
-  quiet_hours: [21, 9]      # no message delivered between 21:00 and 09:00 IST; reschedule to 09:00. (TRAI commercial-comms norms) (VERIFY)
+  quiet_hours: [21, 9]      # SOURCE: TRAI's Telecom Commercial Communications Customer Preference
+                            # Regulations, 2018 bar commercial calls/SMS between 21:00-09:00 IST;
+                            # applied here to all customer-facing messages, not just SMS.
 
 respect_horizon: true       # drop anything scheduled past the engagement window (the engine drops these too)

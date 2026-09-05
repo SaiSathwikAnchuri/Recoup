@@ -219,5 +219,93 @@
       "recoup_wins": true
     }
   },
-  "sensitivity_ordering_holds": true
+  "sensitivity_ordering_holds": true,
+  "seed_robustness": {
+    "seeds": [
+      7,
+      99,
+      123,
+      2024,
+      31337
+    ],
+    "by_seed": {
+      "seed_7": {
+        "recovery_rate": 0.6775,
+        "recoup_delta_per_case": 1256.64,
+        "recoup_ci95": [
+          240.36,
+          2183.48
+        ],
+        "recoup_wins": true,
+        "recoup_v2_delta_per_case": 1503.31,
+        "recoup_v2_ci95": [
+          426.28,
+          2588.35
+        ],
+        "recoup_v2_wins": true
+      },
+      "seed_99": {
+        "recovery_rate": 0.72,
+        "recoup_delta_per_case": 2032.09,
+        "recoup_ci95": [
+          792.98,
+          3475.92
+        ],
+        "recoup_wins": true,
+        "recoup_v2_delta_per_case": 1815.26,
+        "recoup_v2_ci95": [
+          457.49,
+          3284.89
+        ],
+        "recoup_v2_wins": true
+      },
+      "seed_123": {
+        "recovery_rate": 0.7175,
+        "recoup_delta_per_case": 2316.09,
+        "recoup_ci95": [
+          1191.18,
+          3697.1
+        ],
+        "recoup_wins": true,
+        "recoup_v2_delta_per_case": 2334.39,
+        "recoup_v2_ci95": [
+          1206.85,
+          3731.32
+        ],
+        "recoup_v2_wins": true
+      },
+      "seed_2024": {
+        "recovery_rate": 0.7275,
+        "recoup_delta_per_case": 2465.04,
+        "recoup_ci95": [
+          1464.31,
+          3722.38
+        ],
+        "recoup_wins": true,
+        "recoup_v2_delta_per_case": 2497.89,
+        "recoup_v2_ci95": [
+          1497.57,
+          3784.15
+        ],
+        "recoup_v2_wins": true
+      },
+      "seed_31337": {
+        "recovery_rate": 0.675,
+        "recoup_delta_per_case": 1676.48,
+        "recoup_ci95": [
+          718.21,
+          2898.08
+        ],
+        "recoup_wins": true,
+        "recoup_v2_delta_per_case": 1804.72,
+        "recoup_v2_ci95": [
+          869.62,
+          3052.68
+        ],
+        "recoup_v2_wins": true
+      }
+    },
+    "recoup_wins_every_seed": true,
+    "recoup_v2_wins_every_seed": true
+  }
 }

@@ -4,6 +4,7 @@
   GET  /healthz              readiness + execute mode
   POST /webhook              Razorpay payment.failed -> decision (+ schedule actions)
   POST /demo/random          synthesise a failed mandate -> decision + 45-day simulation
+  POST /demo/outcome/{id}    demo/testing only: feed one action's result -> observe + re-plan
   POST /decide               decision for an arbitrary case body (no persistence)
   GET  /cases                every case seen, newest first
   GET  /cases/{id}           one case: record + decision + scheduled actions
@@ -15,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -25,10 +27,32 @@ from fastapi.staticfiles import StaticFiles
 from . import bridge, executors, loop, monitoring, webhook
 from .store import Store
 
+log = logging.getLogger("recoup")
 app = FastAPI(title="Recoup", version="1.0")
 STORE = Store()
 _WEBUI = Path(__file__).resolve().parent / "webui"
 app.mount("/vendor", StaticFiles(directory=_WEBUI / "vendor"), name="vendor")
+
+# Every route here is unauthenticated by default — the right posture for a local
+# hackathon demo (matches dry-run-by-default, no secrets required to run at all).
+# For a real deployment, set RECOUP_API_KEY and every route except the ones below
+# starts requiring `Authorization: Bearer <key>`. /webhook authenticates itself via
+# the Razorpay HMAC signature instead (a bearer token would need to live in
+# Razorpay's dashboard, which is a worse place for it); /healthz stays open so a
+# load balancer can probe it; static assets carry nothing sensitive.
+_OPEN_PATHS = {"/", "/healthz", "/app.js", "/data.js", "/webhook"}
+
+
+@app.middleware("http")
+async def _api_key_gate(request: Request, call_next):
+    import os
+    required = os.environ.get("RECOUP_API_KEY")
+    path = request.url.path
+    if required and path not in _OPEN_PATHS and not path.startswith("/vendor/"):
+        got = request.headers.get("authorization", "")
+        if got != f"Bearer {required}":
+            return JSONResponse(status_code=401, content={"error": "missing or invalid API key"})
+    return await call_next(request)
 
 
 @app.get("/healthz")
@@ -141,6 +165,13 @@ def demo_random(cause: str | None = None, seed: int | None = None):
     from service.state import CustomerState
     case, truth = bridge.random_case(seed=seed, cause=cause)
 
+    # a demo case_id is deterministic in `seed` (bridge.random_case), so without this
+    # a second call with the same seed would replay onto the first call's already-
+    # advanced event log (a second PAYMENT_FAILED, a reauth already "tried", ...) and
+    # silently show a different decision than the first call did — the opposite of a
+    # reproducible demo. Every /demo/random call is a fresh, self-contained scenario.
+    STORE.reset_case(case["case_id"])
+
     from service.events import Event, EventType
     STORE.append_event(Event(EventType.PAYMENT_FAILED, case["case_id"], case["case_id"],
                              case["case_id"],
@@ -166,8 +197,35 @@ def demo_random(cause: str | None = None, seed: int | None = None):
 @app.post("/decide")
 async def decide_body(request: Request):
     _require_models()
-    case = json.loads(await request.body())
-    return {"decision": bridge.decide(case)}
+    try:
+        case = json.loads(await request.body())
+    except ValueError:
+        raise HTTPException(400, "malformed JSON body")
+    if not isinstance(case, dict):
+        raise HTTPException(400, "case must be a JSON object")
+    try:
+        return {"decision": bridge.decide(case)}
+    except (KeyError, TypeError) as e:
+        raise HTTPException(400, f"malformed case: missing/invalid {e}")
+
+
+@app.post("/demo/outcome/{case_id}")
+def demo_outcome(case_id: str, kind: str, result: str):
+    """Demo/testing convenience — NOT a Razorpay webhook shape. Feeds one action's
+    real-world result (a retry that failed, a re-auth that succeeded, ...) straight
+    into `record_action_result`, the same closed-loop step a genuine
+    `payment.captured`/next `payment.failed` triggers, so the adaptive re-plan step
+    is something a judge can click rather than only something `tests/test_loop.py`
+    exercises directly in Python. Guarded by RECOUP_API_KEY like every other
+    mutating route once one is set."""
+    _require_models()
+    if kind not in ("retry", "reauth", "sms", "nudge"):
+        raise HTTPException(400, "kind must be one of retry, reauth, sms, nudge")
+    if result not in ("success", "fail"):
+        raise HTTPException(400, "result must be 'success' or 'fail'")
+    if not STORE.get_case(case_id):
+        raise HTTPException(404, "unknown case")
+    return loop.record_action_result(STORE, case_id, kind, result)
 
 
 @app.get("/cases")
@@ -244,6 +302,13 @@ def api_models_health():
 def _run_due(rows: list[dict]) -> list[dict]:
     done = []
     for a in rows:
+        # claim it first: due_actions() only SELECTs, so two concurrent /tick calls
+        # (uvicorn runs sync routes in a thread pool) could otherwise both see this
+        # row as pending and execute its side effect twice (real money in
+        # razorpay_test mode via the re-auth Payment Link). Whoever loses the
+        # UPDATE race skips it instead.
+        if not STORE.claim_action(a["id"]):
+            continue
         case = STORE.get_case(a["case_id"])
         if case is None:
             STORE.mark_action(a["id"], "skipped", {"error": "case gone"})
@@ -277,4 +342,14 @@ def stats():
 
 @app.exception_handler(Exception)
 async def _err(request: Request, exc: Exception):
-    return JSONResponse(status_code=500, content={"error": type(exc).__name__, "detail": str(exc)})
+    # Final-audit fix: this used to echo str(exc) straight back to the caller —
+    # harmless for the KeyErrors a fuzzed /decide body raises, but the wrong
+    # default for a public endpoint in general (a future exception type could
+    # carry a file path, a query fragment, or other internal detail). Full detail
+    # goes to the server log; the client gets an id it can hand to us, nothing more.
+    log.exception("unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={
+        "error": "internal_error",
+        "detail": "an unexpected error occurred; see server logs",
+        "path": request.url.path,
+    })

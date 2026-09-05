@@ -130,6 +130,10 @@ class Store:
         r = self._c.execute("SELECT record_json FROM cases WHERE case_id=?", (case_id,)).fetchone()
         return json.loads(r["record_json"]) if r else None
 
+    def case_status(self, case_id: str) -> str | None:
+        r = self._c.execute("SELECT status FROM cases WHERE case_id=?", (case_id,)).fetchone()
+        return r["status"] if r else None
+
     def list_cases(self, limit: int = 100) -> list[dict]:
         # join only the *latest* decision per case, so a re-plan doesn't duplicate the row
         rows = self._c.execute(
@@ -170,6 +174,20 @@ class Store:
         rows = self._c.execute(
             "SELECT * FROM actions WHERE status='pending' AND due_at<=? ORDER BY due_at", (now,)).fetchall()
         return [dict(r) for r in rows]
+
+    def claim_action(self, action_id: int) -> bool:
+        """Atomically move one action from 'pending' to 'running' before executing it.
+        Returns False if another caller already claimed it — `due_actions` SELECTs
+        rows without locking them, so two concurrent /tick calls (uvicorn runs sync
+        routes in a thread pool, and the sqlite3 connection is opened with
+        check_same_thread=False for exactly that reason) could otherwise both see
+        the same row as pending and run its side effect (a real Payment Link, an
+        SMS) twice. This turns that race into a single UPDATE...WHERE that only one
+        caller can win."""
+        cur = self._c.execute(
+            "UPDATE actions SET status='running' WHERE id=? AND status='pending'", (action_id,))
+        self._c.commit()
+        return cur.rowcount == 1
 
     def mark_action(self, action_id: int, status: str, result: dict) -> None:
         self._c.execute(
@@ -316,6 +334,26 @@ class Store:
             "UPDATE actions SET status='cancelled' WHERE case_id=? AND status='pending'", (case_id,))
         self._c.commit()
         return cur.rowcount
+
+    def reset_case(self, case_id: str) -> None:
+        """Wipe every trace of one case_id — events, folded state, decisions,
+        actions, outcomes, escalations, idempotency bindings, the case row itself.
+
+        Final-audit fix: `/demo/random?seed=N` derives a deterministic case_id from
+        the seed, but a demo case is a live record like any other — a second call
+        with the same seed used to keep appending to the first call's event log
+        (a second PAYMENT_FAILED, a reauth already marked "tried" from last time,
+        ...), so the *displayed decision* silently changed run to run for the exact
+        same seed. Calling this before replaying a demo scenario makes "same seed"
+        actually mean "same outcome, every time" — required for a reproducible demo
+        script, not just nice-to-have. Never called on the webhook-driven path.
+        """
+        for table in ("events", "outcomes", "actions", "decisions", "escalations", "cases"):
+            self._c.execute(f"DELETE FROM {table} WHERE case_id=?", (case_id,))
+        self._c.execute("DELETE FROM customers WHERE customer_id=?", (case_id,))
+        self._c.execute("DELETE FROM mandates WHERE mandate_id=?", (case_id,))
+        self._c.execute("DELETE FROM idempotency_keys WHERE ref=?", (case_id,))
+        self._c.commit()
 
     def close(self) -> None:
         self._c.close()

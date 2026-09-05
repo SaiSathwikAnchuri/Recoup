@@ -44,10 +44,16 @@ from harness.plan import Plan, ScheduledAction  # noqa: E402
 @dataclass
 class EVParams:
     day_grid_step: int = 1
-    max_exec_prob: float = 0.93        # generic tech-failure ceiling (matches priors.max_success_prob)
+    # Integrity note (final audit): these two used to be bit-identical to the simulator's
+    # hidden ground truth (priors.max_success_prob=0.93, limit_breach.p_success_before_reset
+    # =0.02) — an earlier version of this file even said so in a comment. That is leakage at
+    # the design level: a real deployment would not know these to two decimal places. Both are
+    # now independent, deliberately-round "field estimate" values instead, like every other
+    # belief in config/costs.yaml. Harness + Phase 9 were rerun after this change (see README).
+    max_exec_prob: float = 0.90        # believed ceiling on any retry's success probability
     downtime_p_day0: float = 0.05
     downtime_p_recovered: float = 0.80
-    limit_p_before_reset: float = 0.02
+    limit_p_before_reset: float = 0.05
     limit_p_after_reset: float = 0.90
     min_ev_to_act: float = 0.0            # absolute EV floor
     min_ev_frac_of_amount: float = 0.05   # ... or this fraction of the debit, whichever is larger:

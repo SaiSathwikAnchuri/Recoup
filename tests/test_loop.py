@@ -89,3 +89,44 @@ def test_reward_is_recorded_per_action(store):
     loop.record_action_result(store, "sub_rw", "retry", "success", delay_days=2)
     outs = store.outcomes_for("sub_rw")
     assert outs and outs[-1]["reward"] > 0        # a successful recovery pays off
+
+
+# -- payment.captured webhook dispatch (final-audit fix) ---------------
+def _captured(sub=None, amount=299900, notes=None):
+    entity = {"amount": amount, "id": "pay_captured_1", "status": "captured"}
+    if notes is not None:
+        entity["notes"] = notes
+    if sub:
+        entity["subscription_id"] = sub
+    return {"event": "payment.captured", "payload": {"payment": {"entity": entity}}}
+
+
+def test_captured_webhook_closes_an_open_case_as_a_retry(store):
+    loop.ingest_webhook_event(store, _event(sub="sub_cap"), dedup_key="e5")
+    res = loop.ingest_webhook_event(store, _captured(sub="sub_cap"))
+    assert res["recovered"] is True and res["kind"] == "retry"
+    assert store.case_status("sub_cap") == "recovered"
+
+
+def test_captured_webhook_on_reauth_payment_link_is_correlated_by_notes(store):
+    """A re-auth Payment Link's own payment.captured webhook has no subscription_id
+    linking it back to the case — only the notes Recoup itself attached when it
+    created the link (service/executors.py::_reauth). Without reading those notes
+    this recovery is invisible; this is the bug the final audit fixed."""
+    loop.ingest_webhook_event(store, _event(sub="sub_reauth_link"), dedup_key="e6")
+    res = loop.ingest_webhook_event(store, _captured(
+        notes={"recoup_case": "sub_reauth_link", "recoup_action": "reauth"}))
+    assert res["recovered"] is True and res["kind"] == "reauth"
+    assert store.case_status("sub_reauth_link") == "recovered"
+
+
+def test_captured_webhook_on_already_closed_case_is_ignored(store):
+    """A stray later webhook on an already-recovered/revoked case (e.g. an
+    unrelated ordinary renewal charge on the same subscription next month) must
+    not be mistaken for a second recovery."""
+    loop.ingest_webhook_event(store, _event(sub="sub_done"), dedup_key="e7")
+    loop.record_action_result(store, "sub_done", "retry", "success", delay_days=1)
+    before = store.outcomes_for("sub_done")
+    res = loop.ingest_webhook_event(store, _captured(sub="sub_done"))
+    assert res.get("ignored") == "payment.captured"
+    assert store.outcomes_for("sub_done") == before      # no duplicate outcome row

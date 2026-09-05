@@ -196,7 +196,7 @@ function Overview({ d, live }) {
       <div class="facts">
         <div class="fact"><div class="n">1</div><div class="l">decision chain — not a multi-agent orchestra</div></div>
         <div class="fact"><div class="n">4</div><div class="l">action types: retry, nudge, SMS, re-auth</div></div>
-        <div class="fact"><div class="n">107</div><div class="l">tests; one command reproduces every number</div></div>
+        <div class="fact"><div class="n">117</div><div class="l">tests; one command reproduces every number</div></div>
         <div class="fact"><div class="n">0</div><div class="l">real customer records — synthetic under DPDP</div></div>
       </div>
       <ul class="plain">

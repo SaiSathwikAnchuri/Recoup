@@ -19,7 +19,7 @@ from datetime import timedelta
 
 from agent.costs import CostModel
 from harness.engine import EngagementState
-from simulator.calendar_utils import parse_dt
+from simulator.calendar_utils import add_months, ist, parse_dt
 
 from . import bridge, webhook
 from .events import Event, EventType
@@ -274,7 +274,13 @@ def mark_revoked(store, case_id: str, reason: str = "mandate revoked at bank") -
     return {"case_id": case_id, "revoked": True}
 
 
-# ---------------------------------------------------------------------------
+# statuses a captured/halted webhook may still legitimately resolve — NOT the
+# ones already terminal (a stray later webhook on an already-closed case must
+# not re-open it or re-count it, e.g. an unrelated ordinary renewal charge on
+# the same subscription months later should never be mistaken for a recovery)
+_RESOLVABLE_STATUSES = ("open", "escalated")
+
+
 def ingest_webhook_event(store, event: dict, *, dedup_key: str | None = None) -> dict:
     """Dispatch a raw Razorpay webhook to the right loop entry point."""
     etype = str(event.get("event", ""))
@@ -284,10 +290,21 @@ def ingest_webhook_event(store, event: dict, *, dedup_key: str | None = None) ->
 
     if etype in ("payment.captured",) or (etype == "subscription.charged"
                                           and pay.get("status") == "captured"):
-        if ref and store.get_case(str(ref)):
-            return record_action_result(store, str(ref), "retry", "success",
-                                        delay_days=None)
-        return {"ignored": etype, "reason": "no open recovery for this subscription"}
+        # prefer the case/action Recoup itself tagged on a re-auth Payment Link
+        # (payment.notes.recoup_case) over the raw subscription/payment id — a
+        # Payment Link's own payment webhook isn't otherwise linked back to the
+        # subscription it was recovering (see webhook.recovery_ref).
+        cid, kind = webhook.recovery_ref(event)
+        cid = cid or (str(ref) if ref else None)
+        case = store.get_case(cid) if cid else None
+        if case and store.case_status(cid) in _RESOLVABLE_STATUSES:
+            obs = parse_dt(case["observed_at"])
+            delay = max(0.0, (time.time() - obs.timestamp()) / 86400.0)
+            ny, nm = add_months(obs.year, obs.month, 1)
+            late = time.time() > ist(ny, nm, 1).timestamp()
+            return record_action_result(store, cid, kind, "success",
+                                        delay_days=round(delay, 2), late=late)
+        return {"ignored": etype, "reason": "no open recovery for this payment"}
 
     if etype in ("subscription.halted", "subscription.cancelled", "mandate.revoked"):
         if ref and store.get_case(str(ref)):

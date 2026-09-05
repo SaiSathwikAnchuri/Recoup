@@ -136,6 +136,48 @@ def sensitivity(priors: dict, n: int, seed: int, cfg: HarnessConfig, costs: Cost
 
 
 # ---------------------------------------------------------------------------
+# D. seed robustness (final audit) — is world seed 42 unusually favorable?
+#
+# The Phase 9 sensitivity sweep above already varies the PRIORS at a single data
+# draw (seed 42 + 999). It never asks whether the headline number is just a lucky
+# roll of the dice at seed 42 itself. This draws fresh 400-case batches at five
+# other seeds, under the SAME unperturbed priors, and checks recoup (and
+# recoup_v2) still beat fixed_schedule with the CI excluding zero at every one.
+# ---------------------------------------------------------------------------
+def seed_robustness(priors: dict, n: int, seeds: list[int], cfg: HarnessConfig,
+                    costs: CostModel) -> dict:
+    from agent.policies import RecoupV2
+
+    rows = {}
+    for sd in seeds:
+        c, t = build_batch(n, sd, priors)
+        truth = {x["case_id"]: x for x in t}
+        fx = _run(FixedSchedule(), c, truth, cfg, costs, sd)
+        rc = _run(EVPolicy(), c, truth, cfg, costs, sd)
+        d_rc = paired_delta(rc, fx, "net_value", seed=sd)
+        row = {
+            "recovery_rate": summarise(rc)["recovery_rate"],
+            "recoup_delta_per_case": d_rc["mean"], "recoup_ci95": d_rc["ci95"],
+            "recoup_wins": bool(d_rc["ci95"][0] > 0),
+        }
+        try:
+            rv2 = _run(RecoupV2(), c, truth, cfg, costs, sd)
+            d_v2 = paired_delta(rv2, fx, "net_value", seed=sd)
+            row["recoup_v2_delta_per_case"] = d_v2["mean"]
+            row["recoup_v2_ci95"] = d_v2["ci95"]
+            row["recoup_v2_wins"] = bool(d_v2["ci95"][0] > 0)
+        except Exception:
+            pass                      # recoup_v2 unavailable (older env) — not fatal
+        rows[f"seed_{sd}"] = row
+    return {
+        "seeds": seeds,
+        "by_seed": rows,
+        "recoup_wins_every_seed": all(r["recoup_wins"] for r in rows.values()),
+        "recoup_v2_wins_every_seed": all(r.get("recoup_v2_wins", False) for r in rows.values()),
+    }
+
+
+# ---------------------------------------------------------------------------
 # C. fairness
 # ---------------------------------------------------------------------------
 def fairness(cases, truth, cfg, costs, seed) -> dict:
@@ -226,6 +268,18 @@ def main() -> None:
                   f"CI {r['ci95']}  {flag}")
         report["sensitivity_ordering_holds"] = all(r["recoup_wins"] for r in report["sensitivity"].values())
         print(f"\n  ordering holds under every perturbation: {report['sensitivity_ordering_holds']}")
+
+        print("\n=== D. seed robustness — is seed 42 unusually favorable? ===\n")
+        other_seeds = [7, 99, 123, 2024, 31337]
+        report["seed_robustness"] = seed_robustness(priors, args.n, other_seeds, cfg, costs)
+        for name, r in report["seed_robustness"]["by_seed"].items():
+            flag = "OK" if r["recoup_wins"] else "  <-- check"
+            v2 = (f"  recoup_v2 Rs {r['recoup_v2_delta_per_case']:+.0f}/case"
+                  if "recoup_v2_delta_per_case" in r else "")
+            print(f"  {name:10s}  recovery {r['recovery_rate']:.1%}  "
+                  f"recoup Rs {r['recoup_delta_per_case']:+9.0f}/case  CI {r['recoup_ci95']}  {flag}{v2}")
+        print(f"\n  recoup beats fixed_schedule at every tested seed "
+              f"(42 + {other_seeds}): {report['seed_robustness']['recoup_wins_every_seed']}")
 
     RESULTS.mkdir(exist_ok=True)
     Path(args.out).write_text(json.dumps(report, indent=2, default=str))
