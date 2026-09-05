@@ -311,6 +311,13 @@ def ingest_webhook_event(store, event: dict, *, dedup_key: str | None = None) ->
             return mark_revoked(store, str(ref))
         return {"ignored": etype, "reason": "no open recovery"}
 
-    # default: a failed / pending charge -> open or continue a recovery
+    # payment.failed, subscription.pending (Razorpay's own name for "a charge on
+    # this subscription just failed and it moved to pending" — see
+    # https://razorpay.com/docs/subscriptions/payment-retries/), or anything else
+    # carrying a failed/incomplete payment -> open or continue a recovery. Not
+    # narrowed to those two event names on purpose: Razorpay's own automatic
+    # retries (T+1/T+3) generate further failed-payment webhooks on the same
+    # subscription while ours run in parallel, and every one of them is a
+    # legitimate "still failing" signal to fold into the same case.
     case = webhook.parse_event(event, history=_prior_history(store, str(ref)) if ref else None)
     return open_recovery(store, case, dedup_key=dedup_key)

@@ -109,6 +109,13 @@ class Store:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._c = sqlite3.connect(self.path, check_same_thread=False)
         self._c.row_factory = sqlite3.Row
+        # WAL: readers (GET /cases, /api/metrics, ...) no longer block behind a writer
+        # (a webhook, a /tick) or vice versa — matters once uvicorn's thread pool has
+        # more than one request in flight, which claim_action's docstring above is
+        # already written for. busy_timeout backs off instead of raising "database is
+        # locked" on the rare write-write collision WAL doesn't eliminate.
+        self._c.execute("PRAGMA journal_mode=WAL")
+        self._c.execute("PRAGMA busy_timeout=5000")
         self._c.executescript(_SCHEMA)
         self._c.commit()
 

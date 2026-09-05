@@ -213,7 +213,7 @@ stays the headline batch policy; `recoup_v2` is what the service runs.
 ### API (Recoup 2.0 additions)
 
 ```
-POST /webhook                      idempotent; payment.failed → open/continue, captured → recover, halted → revoke
+POST /webhook                      idempotent; payment.failed / subscription.pending → open/continue, captured → recover, halted → revoke
 GET  /api/cases/{id}/timeline      the event log for one recovery
 GET  /api/cases/{id}/decision      the latest structured decision (+ ROS breakdown)
 POST /api/cases/{id}/replan        force a re-plan from current state
@@ -349,9 +349,19 @@ them set:
 | `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | test-mode credentials for the above — rejected unless `RAZORPAY_KEY_ID` starts with `rzp_test_` |
 | `ANTHROPIC_API_KEY` | enables the optional cached LLM audit-note rewrite (`agent/llm_explain.py`) |
 | `RECOUP_API_KEY` | requires `Authorization: Bearer <key>` on every route except `/`, `/healthz`, the static assets, and `/webhook` (which authenticates itself via the HMAC signature instead) — a hackathon judge running this locally never needs it; a real deployment should set it |
+| `RECOUP_TICK_INTERVAL_SECONDS` | how often the background loop runs `/tick`'s logic on its own (default 30; set to `0` to go back to calling `POST /tick` manually — tests do this so a stray background task never touches a torn-down test database) |
+| `RECOUP_RATE_LIMIT_PER_MIN` | per-client-IP request cap (default 300/min) — generous enough that no normal demo or test run ever hits it; a single-process in-memory guard against one misbehaving client, not a substitute for a real reverse proxy |
 
 None of these are read anywhere near `agent/` or `simulator/` — they only gate the service's
-edges (signature check, execution mode, API access), never the decision logic.
+edges (signature check, execution mode, API access, rate), never the decision logic.
+
+**Hardening added in the final audit pass:** `/tick` now runs on its own on a background
+schedule instead of needing a human or cron to remember it; SQLite runs in WAL mode so a
+webhook write no longer blocks a dashboard read; every route enforces a body-size cap and a
+per-IP rate limit; `service/store.py::claim_action` makes scheduled-action execution
+race-safe against concurrent `/tick` calls (verified: `tests/test_service.py`). A `Dockerfile`
+is included for a from-scratch deployment path (written and reviewed, not build-tested in
+this environment — no Docker daemon available here).
 
 Outputs — `data/`, `agent/models/` and `audit/` are git-ignored and regenerated;
 `results/*.json` (seed 42) are committed as a record and overwritten by each run:

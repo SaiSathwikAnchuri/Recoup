@@ -154,6 +154,14 @@ window.RECOUP_RESULTS = {
       "hi": 4067
     }
   ],
+  "seed_robustness": [
+    { "name": "seed 42 (headline)", "v": 2681, "lo": 1427, "hi": 4162 },
+    { "name": "seed 7", "v": 1257, "lo": 240, "hi": 2183 },
+    { "name": "seed 99", "v": 2032, "lo": 793, "hi": 3476 },
+    { "name": "seed 123", "v": 2316, "lo": 1191, "hi": 3697 },
+    { "name": "seed 2024", "v": 2465, "lo": 1464, "hi": 3722 },
+    { "name": "seed 31337", "v": 1676, "lo": 718, "hi": 2898 }
+  ],
   "fairness": [
     {
       "group": "Business",

@@ -1,0 +1,11 @@
+.git/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.cache/
+data/
+audit/
+agent/models/
+service/*.db

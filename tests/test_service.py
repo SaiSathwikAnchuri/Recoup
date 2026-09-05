@@ -276,3 +276,52 @@ def test_claim_action_is_race_safe(tmp_path):
     assert s.claim_action(aid) is True         # first caller wins the race
     assert s.claim_action(aid) is False        # a concurrent second caller does not
     s.close()
+
+
+def test_store_uses_wal_mode(tmp_path):
+    from service.store import Store
+    s = Store(tmp_path / "wal.db")
+    mode = s._c.execute("PRAGMA journal_mode").fetchone()[0]
+    assert mode.lower() == "wal"
+    s.close()
+
+
+@pytest.mark.skipif(not _MODELS, reason="models not trained")
+def test_autotick_executes_due_actions_once_the_interval_elapses(client):
+    """The autotick loop's one piece of real logic is 'sleep, then run due
+    actions' — exercised directly rather than via the full FastAPI lifespan
+    (conftest.py sets RECOUP_TICK_INTERVAL_SECONDS=0 for every other test, since
+    a live background task touching a torn-down test database is its own hazard)."""
+    import asyncio
+    import service.app as app_mod
+
+    ev = {"event": "payment.failed", "payload": {"payment": {"entity": {
+        "amount": 50000, "error_code": "U30", "id": "pay_autotick"}}}}
+    client.post("/webhook", json=ev)
+    app_mod.STORE._c.execute("UPDATE actions SET due_at=0 WHERE case_id='pay_autotick'")
+    app_mod.STORE._c.commit()
+
+    async def _one_iteration():
+        await asyncio.sleep(0.01)
+        return app_mod._run_due(app_mod.STORE.due_actions())
+
+    done = asyncio.run(_one_iteration())
+    assert any(d["case_id"] == "pay_autotick" for d in done)
+
+
+def test_request_body_over_the_size_limit_is_rejected(client):
+    huge = b'{"x":"' + b"a" * 300_000 + b'"}'
+    r = client.post("/decide", content=huge, headers={"content-length": str(len(huge))})
+    assert r.status_code == 413
+
+
+def test_rate_limit_returns_429_once_exceeded(client, monkeypatch):
+    import service.app as app_mod
+    monkeypatch.setattr(app_mod, "_RATE_LIMIT", 3)
+    app_mod._rate_hits.clear()
+    try:
+        codes = [client.get("/cases").status_code for _ in range(5)]
+        assert codes[:3] == [200, 200, 200]
+        assert 429 in codes[3:]
+    finally:
+        app_mod._rate_hits.clear()          # don't let a lowered limit leak into later tests

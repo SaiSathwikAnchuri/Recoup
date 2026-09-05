@@ -9,11 +9,18 @@ given the seed, so caching them is safe and cuts a full run by ~2x.
 from __future__ import annotations
 
 import hashlib
+import os
 import pickle
 from pathlib import Path
 
 import pytest
 import yaml
+
+# service/app.py reads this once at import time to decide whether to start its
+# background auto-tick loop. Set before anything imports it (whichever test
+# module happens first) so no stray background task ever touches a test's
+# temp SQLite file after that test's fixtures have torn down.
+os.environ.setdefault("RECOUP_TICK_INTERVAL_SECONDS", "0")
 
 from simulator.generate import build_batch
 

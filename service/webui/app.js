@@ -172,6 +172,13 @@ function Overview({ d, live }) {
       <div class="panel"><${Dots} rows=${d.sensitivity} max=${4900} /></div>
       <p class="muted" style=${{ marginTop: "1rem", fontSize: ".88rem" }}>Every interval clears zero —
         the ordering survives a churn hazard nearly doubled, an LTV halved, outages tripled.</p>
+      ${d.seed_robustness && d.seed_robustness.length > 1 && html`<${Fragment}>
+        <h3 style=${{ marginTop: "2.2rem" }}>Is seed 42 just a lucky draw?</h3>
+        <div class="panel"><${Dots} rows=${d.seed_robustness} max=${4900} /></div>
+        <p class="muted" style=${{ marginTop: "1rem", fontSize: ".88rem" }}>Five more independent
+          world seeds, same priors as the headline. Recoup beats fixed_schedule with the interval
+          clearing zero at every one — seed 42 is the top of this range, not the only draw.</p>
+      <//>`}
     </div></section>
 
     <section class="wide">
@@ -196,7 +203,7 @@ function Overview({ d, live }) {
       <div class="facts">
         <div class="fact"><div class="n">1</div><div class="l">decision chain — not a multi-agent orchestra</div></div>
         <div class="fact"><div class="n">4</div><div class="l">action types: retry, nudge, SMS, re-auth</div></div>
-        <div class="fact"><div class="n">117</div><div class="l">tests; one command reproduces every number</div></div>
+        <div class="fact"><div class="n">121</div><div class="l">tests; one command reproduces every number</div></div>
         <div class="fact"><div class="n">0</div><div class="l">real customer records — synthetic under DPDP</div></div>
       </div>
       <ul class="plain">

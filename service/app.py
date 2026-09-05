@@ -15,9 +15,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import time
+from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -27,8 +31,40 @@ from fastapi.staticfiles import StaticFiles
 from . import bridge, executors, loop, monitoring, webhook
 from .store import Store
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("recoup")
-app = FastAPI(title="Recoup", version="1.0")
+
+# Scheduled actions used to need a human (or a cron job) to remember to call
+# /tick. A real recovery service can't depend on that — a scheduled retry that
+# never fires is worse than not scheduling one at all. On by default; set
+# RECOUP_TICK_INTERVAL_SECONDS=0 to disable (tests do, via conftest.py, so a
+# stray background task never touches a test's temp database after teardown).
+_TICK_INTERVAL = float(os.environ.get("RECOUP_TICK_INTERVAL_SECONDS", "30"))
+
+
+async def _autotick_loop():
+    while True:
+        await asyncio.sleep(_TICK_INTERVAL)
+        try:
+            done = _run_due(STORE.due_actions())
+            if done:
+                log.info("autotick executed %d action(s)", len(done))
+        except Exception:
+            log.exception("autotick tick failed")
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    task = None
+    if _TICK_INTERVAL > 0:
+        task = asyncio.create_task(_autotick_loop())
+        log.info("autotick started: every %.0fs", _TICK_INTERVAL)
+    yield
+    if task is not None:
+        task.cancel()
+
+
+app = FastAPI(title="Recoup", version="1.0", lifespan=_lifespan)
 STORE = Store()
 _WEBUI = Path(__file__).resolve().parent / "webui"
 app.mount("/vendor", StaticFiles(directory=_WEBUI / "vendor"), name="vendor")
@@ -45,13 +81,56 @@ _OPEN_PATHS = {"/", "/healthz", "/app.js", "/data.js", "/webhook"}
 
 @app.middleware("http")
 async def _api_key_gate(request: Request, call_next):
-    import os
     required = os.environ.get("RECOUP_API_KEY")
     path = request.url.path
     if required and path not in _OPEN_PATHS and not path.startswith("/vendor/"):
         got = request.headers.get("authorization", "")
         if got != f"Bearer {required}":
             return JSONResponse(status_code=401, content={"error": "missing or invalid API key"})
+    return await call_next(request)
+
+
+# request bodies are small structured JSON everywhere in this API (the largest
+# legitimate one is a Razorpay webhook, a few KB) — cap well above that so a
+# malformed or hostile oversized body is rejected before json.loads() ever
+# touches it, rather than tying up a worker thread parsing megabytes of garbage.
+_MAX_BODY_BYTES = 256_000
+
+
+@app.middleware("http")
+async def _body_size_limit(request: Request, call_next):
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > _MAX_BODY_BYTES:
+        return JSONResponse(status_code=413, content={"error": "request body too large"})
+    return await call_next(request)
+
+
+# Minimal in-memory rate limit — one process, one bucket per client IP, no new
+# dependency. This is not what stands between Recoup and a real DDoS (that's a
+# reverse proxy's job); it is here so one misbehaving client can't peg a single
+# demo instance's CPU on /decide or /webhook. Generous enough that no normal
+# demo, test run, or judge clicking around ever sees it.
+_RATE_LIMIT = int(os.environ.get("RECOUP_RATE_LIMIT_PER_MIN", "300"))
+_rate_hits: dict[str, deque] = defaultdict(deque)
+
+
+@app.middleware("http")
+async def _rate_limit(request: Request, call_next):
+    if request.url.path in ("/", "/healthz") or request.url.path.startswith("/vendor/"):
+        return await call_next(request)
+    ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    # bound total memory for a long-lived process talking to many distinct IPs —
+    # a real deployment behind a real load balancer would use Redis with TTLs
+    # instead; this is enough for a single demo/small-merchant instance.
+    if len(_rate_hits) > 10_000:
+        _rate_hits.clear()
+    hits = _rate_hits[ip]
+    while hits and now - hits[0] > 60:
+        hits.popleft()
+    if len(hits) >= _RATE_LIMIT:
+        return JSONResponse(status_code=429, content={"error": "rate limit exceeded"})
+    hits.append(now)
     return await call_next(request)
 
 
@@ -119,6 +198,15 @@ def api_results():
                          "v": round(r["delta_net_per_case"]),
                          "lo": round(r["ci95"][0]), "hi": round(r["ci95"][1])}
                         for n, r in pj["sensitivity"].items()],
+        "seed_robustness": ([{"name": "seed 42 (headline)",
+                              "v": round(ab["recoup"]["delta_vs_fixed_per_case"]),
+                              "lo": round(ab["recoup"]["delta_ci95"][0]),
+                              "hi": round(ab["recoup"]["delta_ci95"][1])}]
+                            + [{"name": n.replace("seed_", "seed "),
+                                "v": round(r["recoup_delta_per_case"]),
+                                "lo": round(r["recoup_ci95"][0]), "hi": round(r["recoup_ci95"][1])}
+                               for n, r in pj.get("seed_robustness", {}).get("by_seed", {}).items()]
+                            if pj.get("seed_robustness") else []),
         "fairness": [{"group": g.title(), "n": v["n"], "recovery": v["recovery_rate"],
                       "vs_fixed": v["recovery_rate_vs_fixed"], "on_time": v["on_time_rate"],
                       "escalated": v["escalated_rate"],
